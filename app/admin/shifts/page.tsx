@@ -77,7 +77,25 @@ export default function AdminShiftsPage() {
   return (
     <main className="min-h-screen bg-gray-50 p-4">
       <div className="max-w-5xl mx-auto bg-white shadow-md rounded-lg p-6">
-        <h1 className="text-2xl font-bold mb-4">Shifts / Time Entries</h1>
+        <div className="flex items-center justify-between mb-4">
+  <h1 className="text-2xl font-bold">Shifts / Time Entries</h1>
+  <form
+    onSubmit={async (e) => {
+      e.preventDefault();
+      await fetch("/api/admin/logout", { method: "POST" });
+      // Simple hard redirect to login
+      window.location.href = "/admin/login";
+    }}
+  >
+    <button
+      type="submit"
+      className="px-3 py-1 rounded border border-gray-400 text-sm"
+    >
+      Logout
+    </button>
+  </form>
+</div>
+
 
         {/* Filters */}
         <div className="flex flex-wrap gap-4 items-end mb-4">
