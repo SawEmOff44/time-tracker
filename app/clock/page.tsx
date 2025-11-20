@@ -5,14 +5,17 @@ import { useState } from "react";
 type ApiResponse = {
   status?: string;
   message?: string;
-  received?: any;
+  shift?: any;
   error?: string;
 };
+
+const LAKESHOP_ID = "cmi7hef0a0000sf5e3ulcpflw";
+const WAREHOUSE_A_ID = "cmi7hefi20001sf5eo8g8mxuf";
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
-  const [locationId, setLocationId] = useState("LAKESHOP");
+  const [locationId, setLocationId] = useState(LAKESHOP_ID);
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
@@ -23,38 +26,28 @@ export default function ClockPage() {
     setResponse(null);
     setGpsStatus(null);
 
-    if (!locationId) {
-      setResponse({
-        status: "error",
-        error: "Please select a location.",
-      });
-      setLoading(false);
-      return;
-    }
-
     if (!navigator.geolocation) {
-      setGpsStatus("This device does not support location.");
       setResponse({
         status: "error",
-        error: "Location is required to clock in/out.",
+        error: "Location not supported on this device.",
       });
       setLoading(false);
       return;
     }
 
-    // Get GPS position first, then send to API
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
-        setGpsStatus(`Got GPS location: lat=${lat.toFixed(5)}, lng=${lng.toFixed(5)}`);
+
+        setGpsStatus(
+          `Got GPS location: lat=${lat.toFixed(5)}, lng=${lng.toFixed(5)}`
+        );
 
         try {
           const res = await fetch("/api/clock", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               employeeCode,
               pin,
@@ -69,34 +62,36 @@ export default function ClockPage() {
           if (!res.ok) {
             setResponse({
               status: "error",
-              error: data.error || "Something went wrong",
+              error: data.error || "Unknown error",
             });
           } else {
             setResponse(data);
           }
-        } catch (err) {
+        } catch (error) {
           setResponse({
             status: "error",
-            error: "Network error talking to /api/clock",
+            error: "Network error contacting the server.",
           });
         } finally {
           setLoading(false);
         }
       },
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          setGpsStatus("Location permission denied by user.");
+
+      // --- ERROR HANDLER ---
+      (geoErr) => {
+        if (geoErr.code === geoErr.PERMISSION_DENIED) {
+          setGpsStatus("Location permission denied.");
           setResponse({
             status: "error",
             error: "We need location permission to clock you in/out.",
           });
-        } else if (err.code === err.POSITION_UNAVAILABLE) {
+        } else if (geoErr.code === geoErr.POSITION_UNAVAILABLE) {
           setGpsStatus("Location unavailable.");
           setResponse({
             status: "error",
             error: "Could not determine your location.",
           });
-        } else if (err.code === err.TIMEOUT) {
+        } else if (geoErr.code === geoErr.TIMEOUT) {
           setGpsStatus("Location request timed out.");
           setResponse({
             status: "error",
@@ -106,11 +101,13 @@ export default function ClockPage() {
           setGpsStatus("Unknown GPS error.");
           setResponse({
             status: "error",
-            error: "Unknown GPS error. Try again.",
+            error: "Unknown GPS error occurred.",
           });
         }
+
         setLoading(false);
       },
+
       {
         enableHighAccuracy: true,
         timeout: 10000,
@@ -124,11 +121,10 @@ export default function ClockPage() {
       <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4">
         <h1 className="text-2xl font-bold text-center">Clock In / Out</h1>
         <p className="text-sm text-gray-600 text-center">
-          When you submit, we&apos;ll use GPS to confirm your location.
+          GPS is required for clocking in/out.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Location selection */}
           <div>
             <label className="block text-sm font-medium mb-1">
               Location / Job Site
@@ -137,28 +133,25 @@ export default function ClockPage() {
               className="border rounded px-2 py-1 w-full"
               value={locationId}
               onChange={(e) => setLocationId(e.target.value)}
-              required
             >
-              <option value="LAKESHOP">Lake Shop</option>
-              <option value="WAREHOUSE_A">Warehouse A</option>
+              <option value={LAKESHOP_ID}>Lake Shop</option>
+              <option value={WAREHOUSE_A_ID}>Warehouse A</option>
             </select>
           </div>
 
-          {/* Employee Code */}
           <div>
             <label className="block text-sm font-medium mb-1">
               Employee Code
             </label>
             <input
               className="border rounded px-2 py-1 w-full"
+              placeholder="e.g. ALI001"
               value={employeeCode}
               onChange={(e) => setEmployeeCode(e.target.value)}
-              placeholder="e.g. ALI001"
               required
             />
           </div>
 
-          {/* PIN */}
           <div>
             <label className="block text-sm font-medium mb-1">PIN</label>
             <input
@@ -179,14 +172,14 @@ export default function ClockPage() {
           </button>
         </form>
 
-        {/* GPS status */}
+        {/* GPS Status */}
         {gpsStatus && (
           <div className="text-xs text-gray-700 mt-2">
             <strong>GPS:</strong> {gpsStatus}
           </div>
         )}
 
-        {/* Response box */}
+        {/* API Response */}
         <div className="mt-4">
           <h2 className="text-sm font-semibold mb-1">API Response</h2>
           <div className="border rounded px-2 py-2 text-xs bg-gray-50 min-h-[60px] whitespace-pre-wrap">
@@ -201,7 +194,7 @@ export default function ClockPage() {
               </>
             ) : (
               <span className="text-gray-400">
-                Submit the form to see the API response here.
+                Submit the form to see the response.
               </span>
             )}
           </div>
