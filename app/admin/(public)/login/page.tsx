@@ -1,16 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const from = searchParams.get("from") || "/admin/shifts";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,8 +26,8 @@ export default function AdminLoginPage() {
       if (!res.ok) {
         setError(data.error || "Login failed");
       } else {
-        // On success, push to the target (usually /admin/shifts)
-        router.push(from);
+        // Simple redirect after login – no search params
+        router.push("/admin/shifts");
       }
     } catch (err) {
       setError("Network error during login");
