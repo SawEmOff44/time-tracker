@@ -1,7 +1,6 @@
-import type { Metadata } from "next";
 import "./globals.css";
 
-export const metadata: Metadata = {
+export const metadata = {
   title: "Time Tracker",
   description: "GPS-based employee time tracking",
 };
