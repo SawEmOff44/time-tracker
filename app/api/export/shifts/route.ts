@@ -1,84 +1,106 @@
+// app/api/export/shifts/route.ts
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { cookies } from "next/headers";
+
+function requireAdmin() {
+  const cookieStore = cookies();
+  const session = cookieStore.get("admin_session")?.value;
+  return !!session;
+}
+
+function parseDate(input: string | null): Date | undefined {
+  if (!input) return undefined;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
 
 export async function GET(req: NextRequest) {
+  if (!requireAdmin()) {
+    return new NextResponse("Unauthorized", { status: 401 });
+  }
+
   try {
     const { searchParams } = new URL(req.url);
-    const from = searchParams.get("from"); // YYYY-MM-DD
-    const to = searchParams.get("to");     // YYYY-MM-DD
+    const fromParam = searchParams.get("from");
+    const toParam = searchParams.get("to");
+    const employeeId = searchParams.get("employeeId"); // query param name stays employeeId
 
     const where: any = {};
 
-    if (from || to) {
+    // Map external employeeId → internal userId
+    if (employeeId) {
+      where.userId = employeeId;
+    }
+
+    const fromDate = parseDate(fromParam);
+    const toDate = parseDate(toParam);
+
+    if (fromDate || toDate) {
       where.clockIn = {};
-
-      if (from) {
-        where.clockIn.gte = new Date(from);
-      }
-
-      if (to) {
-        const toDate = new Date(to);
-        toDate.setDate(toDate.getDate() + 1);
-        where.clockIn.lt = toDate;
-      }
+      if (fromDate) where.clockIn.gte = fromDate;
+      if (toDate) where.clockIn.lte = toDate;
     }
 
     const shifts = await prisma.shift.findMany({
       where,
+      orderBy: { clockIn: "asc" },
       include: {
-        user: true,
-        location: true,
-      },
-      orderBy: {
-        clockIn: "asc",
+        user: {
+          select: {
+            name: true,
+            employeeCode: true,
+          },
+        },
+        location: {
+          select: {
+            name: true,
+            code: true,
+          },
+        },
       },
     });
 
     const header = [
-      "EmployeeCode",
-      "EmployeeName",
-      "Location",
-      "ClockIn",
-      "ClockOut",
+      "Employee Name",
+      "Employee Code",
+      "Location Name",
+      "Location Code",
+      "Clock In",
+      "Clock Out",
       "Hours",
-      "Status",
     ];
 
     const rows = shifts.map((s) => {
-      const hours =
-        s.clockOut && s.clockIn
-          ? (s.clockOut.getTime() - s.clockIn.getTime()) /
-            (1000 * 60 * 60)
-          : null;
+      const clockIn = s.clockIn.toISOString();
+      const clockOut = s.clockOut ? s.clockOut.toISOString() : "";
+
+      let hours = "";
+      if (s.clockOut) {
+        const ms = s.clockOut.getTime() - s.clockIn.getTime();
+        if (ms > 0) {
+          hours = (ms / (1000 * 60 * 60)).toFixed(2);
+        }
+      }
 
       return [
-        s.user.employeeCode ?? "",
-        s.user.name,
-        s.location.name,
-        s.clockIn.toISOString(),
-        s.clockOut ? s.clockOut.toISOString() : "",
-        hours !== null ? hours.toFixed(2) : "",
-        s.status,
+        s.user?.name ?? "",
+        s.user?.employeeCode ?? "",
+        s.location?.name ?? "",
+        s.location?.code ?? "",
+        clockIn,
+        clockOut,
+        hours,
       ];
     });
 
-    const csvLines = [
-      header.join(","),
-      ...rows.map((r) =>
-        r
-          .map((field) => {
-            const v = String(field ?? "");
-            // escape quotes + commas
-            if (v.includes(",") || v.includes('"') || v.includes("\n")) {
-              return `"${v.replace(/"/g, '""')}"`;
-            }
-            return v;
-          })
-          .join(",")
-      ),
-    ];
+    const csvLines = [header, ...rows].map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")
+    );
 
     const csv = csvLines.join("\n");
 
@@ -90,10 +112,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    console.error("Error exporting shifts", err);
-    return NextResponse.json(
-      { error: "Failed to export shifts" },
-      { status: 500 }
-    );
+    console.error("Error exporting shifts:", err);
+    return new NextResponse("Failed to export shifts", { status: 500 });
   }
 }

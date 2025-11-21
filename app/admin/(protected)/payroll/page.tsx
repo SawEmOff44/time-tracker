@@ -1,347 +1,247 @@
+// app/admin/(protected)/payroll/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, FormEvent } from "react";
 
 type Shift = {
   id: string;
-  clockIn: string; // ISO from API
+  userId: string;
+  clockIn: string;
   clockOut: string | null;
-  user: {
-    id: string;
+  user?: {
     name: string;
     employeeCode: string | null;
   } | null;
-  location: {
-    id: string;
-    name: string;
-    code: string;
-  } | null;
 };
 
-type SummaryRow = {
-  employeeId: string;
+type EmployeeSummary = {
+  userId: string;
   name: string;
-  employeeCode: string;
-  totalHours: number;
-  totalShifts: number;
+  employeeCode: string | null;
+  hours: number;
 };
 
-function hoursBetween(clockIn: string, clockOut: string | null): number {
-  if (!clockOut) return 0;
-  const start = new Date(clockIn).getTime();
-  const end = new Date(clockOut).getTime();
-  const ms = end - start;
-  if (!isFinite(ms) || ms <= 0) return 0;
+function hoursBetween(startISO: string, endISO: string | null): number {
+  if (!endISO) return 0;
+  const start = new Date(startISO);
+  const end = new Date(endISO);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  const ms = end.getTime() - start.getTime();
+  if (ms <= 0) return 0;
   return ms / (1000 * 60 * 60);
 }
 
-function formatHours(h: number) {
-  return h.toFixed(2);
-}
-
-function formatDateInput(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 export default function PayrollPage() {
-  const today = useMemo(() => new Date(), []);
-  const [fromDate, setFromDate] = useState(() => {
-    const d = new Date();
-    // default: 7 days ago
-    d.setDate(d.getDate() - 7);
-    return formatDateInput(d);
-  });
-  const [toDate, setToDate] = useState(() => formatDateInput(today));
-
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [shifts, setShifts] = useState<Shift[]>([]);
+  const [summaries, setSummaries] = useState<EmployeeSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [autoLoaded, setAutoLoaded] = useState(false); // load once on mount
+  // Default to current week on first load
+  useEffect(() => {
+    const today = new Date();
+    const day = today.getDay(); // 0..6
+    const diffToMonday = (day + 6) % 7;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - diffToMonday);
 
-  async function loadShifts() {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+    setFrom(fmt(monday));
+    setTo(fmt(today));
+  }, []);
+
+  async function loadShifts(e?: FormEvent) {
+    if (e) e.preventDefault();
+    if (!from || !to) {
+      setError("Please pick a From and To date.");
+      return;
+    }
+
     try {
       setLoading(true);
       setError(null);
 
       const params = new URLSearchParams();
-      if (fromDate) params.set("from", fromDate);
-      if (toDate) params.set("to", toDate);
+      if (from) params.set("from", from);
+      if (to) params.set("to", to);
 
-      const res = await fetch(`/api/shifts?${params.toString()}`);
+      const res = await fetch(`/api/admin/shifts?${params.toString()}`);
+      const data = await res.json();
 
-      const data = (await res.json().catch(() => ({}))) as
-        | Shift[]
-        | { error?: string };
-
-      if (!res.ok) {
-        const msg =
-          (data as any).error ||
-          `Failed to load shifts (status ${res.status})`;
-        throw new Error(msg);
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to load shifts");
       }
 
-      setShifts(data as Shift[]);
+      const shifts: Shift[] = data;
+      setShifts(shifts);
+
+      const byEmployee = new Map<string, EmployeeSummary>();
+
+      for (const s of shifts) {
+        const hrs = hoursBetween(s.clockIn, s.clockOut);
+        if (!byEmployee.has(s.userId)) {
+          byEmployee.set(s.userId, {
+            userId: s.userId,
+            name: s.user?.name ?? "Unknown",
+            employeeCode: s.user?.employeeCode ?? null,
+            hours: 0,
+          });
+        }
+        const sum = byEmployee.get(s.userId)!;
+        sum.hours += hrs;
+      }
+
+      setSummaries(Array.from(byEmployee.values()));
     } catch (err: any) {
-      console.error("loadShifts error:", err);
-      setError(err.message || "Failed to load shifts");
+      setError(err.message || "Failed to load payroll data");
     } finally {
       setLoading(false);
     }
   }
 
-  // auto-load once with default dates
   useEffect(() => {
-    if (!autoLoaded) {
-      setAutoLoaded(true);
-      loadShifts();
+    if (from && to) {
+      void loadShifts();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoLoaded]);
+  }, [from, to]);
 
-  // Aggregate per employee
-  const summary: SummaryRow[] = useMemo(() => {
-    const byEmployee = new Map<string, SummaryRow>();
-
-    for (const shift of shifts) {
-      if (!shift.user) continue;
-      const id = shift.user.id;
-      const key = id;
-
-      const hours = hoursBetween(shift.clockIn, shift.clockOut);
-
-      if (!byEmployee.has(key)) {
-        byEmployee.set(key, {
-          employeeId: id,
-          name: shift.user.name || "Unknown",
-          employeeCode: shift.user.employeeCode || "",
-          totalHours: 0,
-          totalShifts: 0,
-        });
-      }
-
-      const row = byEmployee.get(key)!;
-      row.totalHours += hours;
-      row.totalShifts += 1;
-    }
-
-    // sort by name or hours descending if you prefer
-    return Array.from(byEmployee.values()).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-  }, [shifts]);
-
-  const totalHoursAll = useMemo(
-    () => summary.reduce((sum, r) => sum + r.totalHours, 0),
-    [summary]
-  );
-
-  const totalShiftsAll = useMemo(
-    () => summary.reduce((sum, r) => sum + r.totalShifts, 0),
-    [summary]
-  );
-
-  function exportSummaryCsv() {
-    if (summary.length === 0) {
-      alert("No data to export for this date range.");
-      return;
-    }
-
-    const header = [
-      "Employee Name",
-      "Employee Code",
-      "Total Hours",
-      "Total Shifts",
-      "From Date",
-      "To Date",
-    ];
-
-    const rows = summary.map((row) => [
-      row.name,
-      row.employeeCode,
-      formatHours(row.totalHours),
-      String(row.totalShifts),
-      fromDate,
-      toDate,
-    ]);
-
-    const csvLines = [header, ...rows]
-      .map((cols) =>
-        cols
-          .map((c) => {
-            const s = c ?? "";
-            // basic CSV escaping
-            if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-              return `"${String(s).replace(/"/g, '""')}"`;
-            }
-            return String(s);
-          })
-          .join(",")
-      )
-      .join("\n");
-
-    const blob = new Blob([csvLines], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `payroll-summary_${fromDate}_to_${toDate}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    URL.revokeObjectURL(url);
+  async function handleExport() {
+    if (!from || !to) return;
+    const params = new URLSearchParams({ from, to });
+    const url = `/api/export/shifts?${params.toString()}`;
+    window.location.href = url;
   }
 
-  function openDetailedCsv() {
-    const params = new URLSearchParams();
-    if (fromDate) params.set("from", fromDate);
-    if (toDate) params.set("to", toDate);
-
-    // hits your existing detailed export API (if implemented)
-    window.open(`/api/export/shifts?${params.toString()}`, "_blank");
-  }
+  // Total hours across all employees in the range
+  const totalHours = summaries.reduce((acc, s) => acc + s.hours, 0);
 
   return (
-    <main className="p-6 space-y-6">
-      <header className="flex items-baseline justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Payroll / Shift Summary</h1>
           <p className="text-sm text-gray-600">
-            Aggregate hours per employee for a chosen date range.
+            Summarize hours by employee for a date range and export to CSV.
           </p>
         </div>
-      </header>
+      </div>
 
       {/* Filters */}
-      <section className="bg-white shadow rounded-lg p-4 space-y-4">
-        <h2 className="text-lg font-semibold">Filters</h2>
-        <div className="grid gap-4 grid-cols-1 md:grid-cols-4 items-end">
-          <div>
-            <label className="block text-sm font-medium mb-1">From date</label>
-            <input
-              type="date"
-              className="border rounded px-2 py-1 w-full"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-1">To date</label>
-            <input
-              type="date"
-              className="border rounded px-2 py-1 w-full"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={loadShifts}
-              disabled={loading}
-              className="px-4 py-2 rounded bg-black text-white text-sm font-semibold disabled:opacity-60"
-            >
-              {loading ? "Loading..." : "Apply"}
-            </button>
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button
-              type="button"
-              onClick={exportSummaryCsv}
-              className="px-3 py-2 rounded border text-xs font-semibold"
-            >
-              Export Summary CSV
-            </button>
-            <button
-              type="button"
-              onClick={openDetailedCsv}
-              className="px-3 py-2 rounded border text-xs font-semibold"
-            >
-              Export Detailed CSV
-            </button>
-          </div>
+      <form
+        onSubmit={loadShifts}
+        className="bg-white border rounded p-4 flex flex-col md:flex-row gap-4 items-start md:items-end"
+      >
+        <div>
+          <label className="block text-xs font-semibold mb-1">From</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1 text-sm"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            required
+          />
         </div>
-        {error && <div className="text-red-600 text-sm mt-2">{error}</div>}
-      </section>
+        <div>
+          <label className="block text-xs font-semibold mb-1">To</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1 text-sm"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            required
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="px-4 py-2 rounded bg-black text-white text-sm font-semibold disabled:opacity-60"
+        >
+          {loading ? "Loading..." : "Refresh"}
+        </button>
+        <button
+          type="button"
+          onClick={handleExport}
+          className="px-4 py-2 rounded border border-gray-300 text-sm font-semibold hover:bg-gray-50"
+        >
+          Export CSV
+        </button>
+      </form>
+
+      {error && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {/* Summary header bar */}
+      <div className="bg-white border rounded px-4 py-2 text-sm flex flex-wrap gap-4 justify-between">
+        <div>
+          <span className="font-semibold">Employees in range:</span>{" "}
+          {summaries.length}
+        </div>
+        <div>
+          <span className="font-semibold">Total hours in range:</span>{" "}
+          {totalHours.toFixed(2)}
+        </div>
+      </div>
 
       {/* Summary table */}
-      <section className="bg-white shadow rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Summary by Employee</h2>
-          <div className="text-xs text-gray-500">
-            {summary.length} employees • {totalShiftsAll} shifts •{" "}
-            {formatHours(totalHoursAll)} hrs
-          </div>
-        </div>
-
-        {loading && (
-          <div className="text-sm text-gray-500">Loading shifts...</div>
-        )}
-
-        {!loading && summary.length === 0 ? (
-          <div className="text-sm text-gray-500">
-            No completed shifts in this date range.
-          </div>
-        ) : null}
-
-        {!loading && summary.length > 0 && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-1 pr-2">Employee</th>
-                  <th className="text-left py-1 pr-2">Code</th>
-                  <th className="text-right py-1 pr-2">Total Hours</th>
-                  <th className="text-right py-1 pr-2">Shifts</th>
-                  <th className="text-right py-1 pr-2">Avg Hours / Shift</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.map((row) => {
-                  const avg =
-                    row.totalShifts > 0
-                      ? row.totalHours / row.totalShifts
-                      : 0;
-                  return (
-                    <tr key={row.employeeId} className="border-b">
-                      <td className="py-1 pr-2">{row.name}</td>
-                      <td className="py-1 pr-2">{row.employeeCode || "—"}</td>
-                      <td className="py-1 pr-2 text-right">
-                        {formatHours(row.totalHours)}
-                      </td>
-                      <td className="py-1 pr-2 text-right">
-                        {row.totalShifts}
-                      </td>
-                      <td className="py-1 pr-2 text-right">
-                        {formatHours(avg)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="border-t font-semibold">
-                  <td className="py-1 pr-2">Total</td>
-                  <td className="py-1 pr-2">—</td>
-                  <td className="py-1 pr-2 text-right">
-                    {formatHours(totalHoursAll)}
+      <div className="bg-white border rounded overflow-x-auto">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 border-b">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700">
+                Employee
+              </th>
+              <th className="px-3 py-2 text-left font-semibold text-gray-700">
+                Code
+              </th>
+              <th className="px-3 py-2 text-right font-semibold text-gray-700">
+                Hours
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td
+                  colSpan={3}
+                  className="px-3 py-4 text-center text-gray-400"
+                >
+                  Loading…
+                </td>
+              </tr>
+            ) : summaries.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={3}
+                  className="px-3 py-4 text-center text-gray-400"
+                >
+                  No shifts found for this date range.
+                </td>
+              </tr>
+            ) : (
+              summaries.map((s) => (
+                <tr key={s.userId} className="border-b last:border-b-0">
+                  <td className="px-3 py-2">{s.name}</td>
+                  <td className="px-3 py-2">
+                    {s.employeeCode || (
+                      <span className="text-gray-400">—</span>
+                    )}
                   </td>
-                  <td className="py-1 pr-2 text-right">{totalShiftsAll}</td>
-                  <td className="py-1 pr-2 text-right">
-                    {totalShiftsAll > 0
-                      ? formatHours(totalHoursAll / totalShiftsAll)
-                      : "0.00"}
+                  <td className="px-3 py-2 text-right font-mono text-xs">
+                    {s.hours.toFixed(2)}
                   </td>
                 </tr>
-              </tfoot>
-            </table>
-          </div>
-        )}
-      </section>
-    </main>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

@@ -1,18 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 
 export default function AdminLoginPage() {
-  const router = useRouter();
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+    setLoading(true);
 
     try {
       const res = await fetch("/api/admin/login", {
@@ -21,28 +22,45 @@ export default function AdminLoginPage() {
         body: JSON.stringify({ password }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        setError(data.error || "Login failed");
+      if (!res.ok || data.error) {
+        setError(data.error || "Invalid password");
       } else {
-        // Simple redirect after login – no search params
-        router.push("/admin/shifts");
+        router.push("/admin");
       }
-    } catch (err) {
-      setError("Network error during login");
+    } catch {
+      setError("Network error contacting server.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="w-full max-w-sm bg-white shadow-md rounded-lg p-6 space-y-4">
+    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
+      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4">
+        {/* Logo */}
+        <div className="w-full flex justify-center mb-2">
+          <Image
+            src="/rhinehart-logo.jpeg"
+            alt="Rhinehart Co. Logo"
+            width={220}
+            height={80}
+            className="object-contain"
+            priority
+          />
+        </div>
+
         <h1 className="text-2xl font-bold text-center">Admin Login</h1>
         <p className="text-sm text-gray-600 text-center">
-          Enter the admin password to manage shifts.
+          Enter the admin password to access the dashboard.
         </p>
+
+        {error && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+            {error}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -58,18 +76,12 @@ export default function AdminLoginPage() {
             />
           </div>
 
-          {error && (
-            <div className="text-sm text-red-600">
-              {error}
-            </div>
-          )}
-
           <button
             type="submit"
             disabled={loading}
             className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
           >
-            {loading ? "Logging in..." : "Login"}
+            {loading ? "Checking..." : "Log In"}
           </button>
         </form>
       </div>
