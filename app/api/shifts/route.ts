@@ -1,29 +1,32 @@
+// app/api/shifts/route.ts
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
+    const url = new URL(req.url);
+    const searchParams = url.searchParams;
+
     const from = searchParams.get("from"); // YYYY-MM-DD
     const to = searchParams.get("to");     // YYYY-MM-DD
 
     const where: any = {};
 
     if (from || to) {
-      where.clockIn = {};
-
+      const clockIn: any = {};
       if (from) {
-        where.clockIn.gte = new Date(from);
+        const fromDate = new Date(from + "T00:00:00");
+        clockIn.gte = fromDate;
       }
-
       if (to) {
-        // make "to" inclusive by adding 1 day
-        const toDate = new Date(to);
-        toDate.setDate(toDate.getDate() + 1);
-        where.clockIn.lt = toDate;
+        // inclusive end-of-day
+        const toDate = new Date(to + "T23:59:59.999");
+        clockIn.lte = toDate;
       }
+      where.clockIn = clockIn;
     }
 
     const shifts = await prisma.shift.findMany({
@@ -37,31 +40,18 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const result = shifts.map((s) => {
-      const hours =
-        s.clockOut && s.clockIn
-          ? (s.clockOut.getTime() - s.clockIn.getTime()) /
-            (1000 * 60 * 60)
-          : null;
+    // Serialize dates to ISO strings for the client-side pages
+    const serialized = shifts.map((s) => ({
+      ...s,
+      clockIn: s.clockIn.toISOString(),
+      clockOut: s.clockOut ? s.clockOut.toISOString() : null,
+    }));
 
-      return {
-        id: s.id,
-        employeeCode: s.user.employeeCode,
-        employeeName: s.user.name,
-        locationName: s.location.name,
-        status: s.status,
-        clockIn: s.clockIn,
-        clockOut: s.clockOut,
-        hours,
-      };
-    });
-
-    return NextResponse.json(result);
+    return NextResponse.json(serialized);
   } catch (err) {
-    console.error("Error fetching shifts", err);
-    return NextResponse.json(
-      { error: "Failed to load shifts" },
-      { status: 500 }
-    );
+    console.error("Error fetching shifts:", err);
+    const message =
+      err instanceof Error ? err.message : "Failed to load shifts";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
