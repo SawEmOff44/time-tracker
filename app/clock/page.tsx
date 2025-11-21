@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type ApiResponse = {
   status?: string;
@@ -9,16 +9,52 @@ type ApiResponse = {
   error?: string;
 };
 
-const LAKESHOP_ID = "cmi7hef0a0000sf5e3ulcpflw";
-const WAREHOUSE_A_ID = "cmi7hefi20001sf5eo8g8mxuf";
+type Location = {
+  id: string;
+  name: string;
+};
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
-  const [locationId, setLocationId] = useState(LAKESHOP_ID);
+
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [locationId, setLocationId] = useState<string>("");
+  const [loadingLocations, setLoadingLocations] = useState(true);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
+
+  // Load locations from the API (which reads from Prisma/Neon)
+  useEffect(() => {
+    async function fetchLocations() {
+      try {
+        setLoadingLocations(true);
+        setLocationError(null);
+
+        const res = await fetch("/api/locations");
+        if (!res.ok) {
+          throw new Error("Failed to load locations");
+        }
+
+        const data = (await res.json()) as Location[];
+
+        setLocations(data);
+        if (data.length > 0) {
+          setLocationId(data[0].id); // default to first location
+        }
+      } catch (err) {
+        console.error("Error loading locations", err);
+        setLocationError("Could not load locations. Please try again later.");
+      } finally {
+        setLoadingLocations(false);
+      }
+    }
+
+    fetchLocations();
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -68,6 +104,7 @@ export default function ClockPage() {
             setResponse(data);
           }
         } catch (error) {
+          console.error("Clock API error", error);
           setResponse({
             status: "error",
             error: "Network error contacting the server.",
@@ -76,8 +113,6 @@ export default function ClockPage() {
           setLoading(false);
         }
       },
-
-      // --- ERROR HANDLER ---
       (geoErr) => {
         if (geoErr.code === geoErr.PERMISSION_DENIED) {
           setGpsStatus("Location permission denied.");
@@ -107,7 +142,6 @@ export default function ClockPage() {
 
         setLoading(false);
       },
-
       {
         enableHighAccuracy: true,
         timeout: 10000,
@@ -124,7 +158,18 @@ export default function ClockPage() {
           GPS is required for clocking in/out.
         </p>
 
+        {/* Location load state / errors */}
+        {loadingLocations && (
+          <p className="text-sm text-gray-500 text-center">
+            Loading locations...
+          </p>
+        )}
+        {locationError && (
+          <p className="text-sm text-red-600 text-center">{locationError}</p>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Location select */}
           <div>
             <label className="block text-sm font-medium mb-1">
               Location / Job Site
@@ -133,25 +178,36 @@ export default function ClockPage() {
               className="border rounded px-2 py-1 w-full"
               value={locationId}
               onChange={(e) => setLocationId(e.target.value)}
+              disabled={loadingLocations || locations.length === 0}
+              required
             >
-              <option value={LAKESHOP_ID}>Lake Shop</option>
-              <option value={WAREHOUSE_A_ID}>Warehouse A</option>
+              {locations.length === 0 ? (
+                <option value="">No locations available</option>
+              ) : (
+                locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
+          {/* Employee Code */}
           <div>
             <label className="block text-sm font-medium mb-1">
               Employee Code
             </label>
             <input
               className="border rounded px-2 py-1 w-full"
-              placeholder="e.g. ALI001"
+              placeholder="e.g. 1234"
               value={employeeCode}
               onChange={(e) => setEmployeeCode(e.target.value)}
               required
             />
           </div>
 
+          {/* PIN */}
           <div>
             <label className="block text-sm font-medium mb-1">PIN</label>
             <input
@@ -165,7 +221,7 @@ export default function ClockPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || loadingLocations || !locationId}
             className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
           >
             {loading ? "Checking location..." : "Clock In / Out"}
