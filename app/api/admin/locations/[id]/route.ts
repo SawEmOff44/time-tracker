@@ -1,65 +1,62 @@
-// app/api/admin/locations/[id]/route.ts
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { cookies } from "next/headers";
 
-// PATCH /api/admin/locations/:id → update fields
-export async function PATCH(
+// Simple admin check via cookie
+function requireAdmin() {
+  const cookieStore = cookies();
+  const session = cookieStore.get("admin_session")?.value;
+  return !!session;
+}
+
+// DELETE /api/admin/locations/:id → delete a location
+export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { id } = params;
+  if (!requireAdmin()) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const id = params.id;
+
+  if (!id) {
+    return NextResponse.json(
+      { error: "Location id is required" },
+      { status: 400 }
+    );
+  }
 
   try {
-    const body = await req.json().catch(() => null);
+    // Optional: check if location has shifts
+    const shiftCount = await prisma.shift.count({
+      where: { locationId: id },
+    });
 
-    if (!body) {
+    if (shiftCount > 0) {
       return NextResponse.json(
-        { error: "Invalid JSON body" },
+        {
+          error:
+            "This location has existing shifts and cannot be deleted. " +
+            "Deactivate it instead or move those shifts first.",
+        },
         { status: 400 }
       );
     }
 
-    const { name, code, lat, lng, radiusMeters, active } = body;
-
-    const data: any = {};
-    if (name !== undefined) data.name = name;
-    if (code !== undefined) data.code = code;
-    if (lat !== undefined) data.lat = Number(lat);
-    if (lng !== undefined) data.lng = Number(lng);
-    if (radiusMeters !== undefined) data.radiusMeters = Number(radiusMeters);
-    if (active !== undefined) data.active = active;
-
-    const updated = await prisma.location.update({
+    await prisma.location.delete({
       where: { id },
-      data,
     });
 
-    return NextResponse.json(updated);
-  } catch (err) {
-    console.error("Error updating location:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to update location";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
-}
-
-// DELETE /api/admin/locations/:id
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  const { id } = params;
-
-  try {
-    await prisma.location.delete({ where: { id } });
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Error deleting location:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to delete location";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to delete location" },
+      { status: 500 }
+    );
   }
 }

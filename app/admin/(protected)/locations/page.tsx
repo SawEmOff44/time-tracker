@@ -23,6 +23,7 @@ export default function LocationsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Form fields
   const [name, setName] = useState("");
@@ -32,7 +33,7 @@ export default function LocationsPage() {
   const [radiusMeters, setRadiusMeters] = useState("100");
   const [active, setActive] = useState(true);
 
-  // NEW: Separate address field just for geocoding
+  // Address field just for geocoding
   const [addressLookup, setAddressLookup] = useState("");
   const [geocodeInfo, setGeocodeInfo] = useState<any>(null);
 
@@ -153,6 +154,42 @@ export default function LocationsPage() {
       setError(err.message || "Failed to create location.");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // -------------------------------
+  // Delete Location
+  // -------------------------------
+  async function handleDelete(id: string) {
+    const loc = locations.find((l) => l.id === id);
+    const label = loc ? `${loc.name} (${loc.code})` : id;
+
+    const ok = window.confirm(
+      `Delete location "${label}"?\n\nIf this location has shifts, deletion may fail.`
+    );
+    if (!ok) return;
+
+    setError(null);
+    setDeletingId(id);
+
+    try {
+      const res = await fetch(`/api/admin/locations/${id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || (data && data.error)) {
+        throw new Error(
+          data.error ||
+            "Failed to delete location. It may have existing shifts."
+        );
+      }
+
+      await loadLocations();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete location.");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -314,7 +351,7 @@ export default function LocationsPage() {
             {locations.map((loc) => (
               <div
                 key={loc.id}
-                className="p-4 bg-white shadow rounded flex justify-between"
+                className="p-4 bg-white shadow rounded flex justify-between items-center gap-4"
               >
                 <div>
                   <p className="font-bold">{loc.name}</p>
@@ -324,12 +361,21 @@ export default function LocationsPage() {
                     {loc.radiusMeters === 0 && " (ad-hoc / no geofence)"}
                   </p>
                 </div>
-                <div className="text-sm">
-                  {loc.active ? (
-                    <span className="text-green-600">Active</span>
-                  ) : (
-                    <span className="text-gray-500">Inactive</span>
-                  )}
+                <div className="flex flex-col items-end gap-2 text-sm">
+                  <span
+                    className={
+                      loc.active ? "text-green-600" : "text-gray-500"
+                    }
+                  >
+                    {loc.active ? "Active" : "Inactive"}
+                  </span>
+                  <button
+                    onClick={() => handleDelete(loc.id)}
+                    disabled={deletingId === loc.id}
+                    className="px-2 py-1 rounded border border-red-500 text-red-600 text-xs disabled:opacity-50"
+                  >
+                    {deletingId === loc.id ? "Deleting..." : "Delete"}
+                  </button>
                 </div>
               </div>
             ))}
