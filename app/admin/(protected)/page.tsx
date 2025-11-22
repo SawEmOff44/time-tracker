@@ -1,6 +1,8 @@
 // app/admin/(protected)/page.tsx
 export const dynamic = "force-dynamic";
 
+import { prisma } from "@/lib/prisma";
+
 type RecentShift = {
   id: string;
   userName: string | null;
@@ -16,31 +18,6 @@ type TopAdhocUser = {
   adhocCount: number;
 };
 
-type DashboardResponse = {
-  totalEmployees?: number;
-  activeEmployees?: number;
-  totalLocations?: number;
-  activeLocations?: number;
-  totalShiftsToday?: number;
-  totalHoursThisWeek?: number;
-  adhocShiftCount?: number;
-  recentShifts?: RecentShift[];
-  topAdhocUsers?: TopAdhocUser[];
-};
-
-async function getDashboardData(): Promise<DashboardResponse> {
-  const res = await fetch("/api/admin/dashboard", {
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    console.error("Failed to load dashboard:", res.status, await res.text());
-    return {};
-  }
-
-  return (await res.json()) as DashboardResponse;
-}
-
 function formatDateTime(value: string | null | undefined) {
   if (!value) return "-";
   const d = new Date(value);
@@ -54,18 +31,172 @@ function formatDateTime(value: string | null | undefined) {
 }
 
 export default async function AdminDashboardPage() {
-  const data = await getDashboardData();
+  // Safe defaults so dashboard never hard-crashes
+  let totalEmployees = 0;
+  let activeEmployees = 0;
+  let totalLocations = 0;
+  let activeLocations = 0;
+  let totalShiftsToday = 0;
+  let totalHoursThisWeek = 0;
+  let adhocShiftCount = 0;
+  let recentShifts: RecentShift[] = [];
+  let topAdhocUsers: TopAdhocUser[] = [];
 
-  const totalEmployees = data.totalEmployees ?? 0;
-  const activeEmployees = data.activeEmployees ?? 0;
-  const totalLocations = data.totalLocations ?? 0;
-  const activeLocations = data.activeLocations ?? 0;
-  const totalShiftsToday = data.totalShiftsToday ?? 0;
-  const totalHoursThisWeek = data.totalHoursThisWeek ?? 0;
-  const adhocShiftCount = data.adhocShiftCount ?? 0;
+  try {
+    const now = new Date();
 
-  const recentShifts = data.recentShifts ?? [];
-  const topAdhocUsers = data.topAdhocUsers ?? [];
+    // Today bounds
+    const startOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    );
+    const endOfToday = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1
+    );
+
+    // One week ago (for weekly stats & ADHOC)
+    const oneWeekAgo = new Date(now);
+    oneWeekAgo.setDate(now.getDate() - 7);
+
+    // Basic counts in parallel
+    const [
+      totalEmployeesCount,
+      activeEmployeesCount,
+      totalLocationsCount,
+      activeLocationsCount,
+      totalShiftsTodayCount,
+    ] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { active: true } }),
+      prisma.location.count(),
+      prisma.location.count({ where: { active: true } }),
+      prisma.shift.count({
+        where: {
+          clockIn: {
+            gte: startOfToday,
+            lt: endOfToday,
+          },
+        },
+      }),
+    ]);
+
+    totalEmployees = totalEmployeesCount;
+    activeEmployees = activeEmployeesCount;
+    totalLocations = totalLocationsCount;
+    activeLocations = activeLocationsCount;
+    totalShiftsToday = totalShiftsTodayCount;
+
+    // Shifts in last week for total hours
+    const weekShifts = await prisma.shift.findMany({
+      where: {
+        clockIn: { gte: oneWeekAgo },
+        clockOut: { not: null },
+      },
+      select: {
+        clockIn: true,
+        clockOut: true,
+      },
+    });
+
+    totalHoursThisWeek = weekShifts.reduce((sum, s) => {
+      if (!s.clockIn || !s.clockOut) return sum;
+      const ms = s.clockOut.getTime() - s.clockIn.getTime();
+      if (!Number.isFinite(ms) || ms <= 0) return sum;
+      return sum + ms / (1000 * 60 * 60);
+    }, 0);
+
+    // Recent shifts
+    const recentShiftRecords = await prisma.shift.findMany({
+      orderBy: { clockIn: "desc" },
+      take: 10,
+      include: {
+        user: true,
+        location: true,
+      },
+    });
+
+    recentShifts = recentShiftRecords.map((shift) => ({
+      id: shift.id,
+      userName: shift.user?.name ?? shift.user?.employeeCode ?? "Unknown",
+      locationName: shift.location?.name ?? null,
+      clockIn: shift.clockIn ? shift.clockIn.toISOString() : null,
+      clockOut: shift.clockOut ? shift.clockOut.toISOString() : null,
+      // ADHOC if bound to the ADHOC location
+      isAdhoc: shift.location?.code === "ADHOC",
+    }));
+
+    // ADHOC logic is based on a special Location with code "ADHOC"
+    const adhocLocation = await prisma.location.findFirst({
+      where: { code: "ADHOC" },
+      select: { id: true },
+    });
+
+    if (adhocLocation) {
+      // Count ADHOC shifts in last week
+      adhocShiftCount = await prisma.shift.count({
+        where: {
+          locationId: adhocLocation.id,
+          clockIn: {
+            gte: oneWeekAgo,
+          },
+        },
+      });
+
+      // Group ADHOC shifts by user in last week
+      const adhocGroups = await prisma.shift.groupBy({
+        by: ["userId"],
+        where: {
+          locationId: adhocLocation.id,
+          clockIn: {
+            gte: oneWeekAgo,
+          },
+        },
+        _count: {
+          userId: true,
+        },
+        orderBy: {
+          _count: {
+            userId: "desc",
+          },
+        },
+        take: 5,
+      });
+
+      const adhocUserIds = adhocGroups
+        .map((g) => g.userId)
+        .filter((id): id is string => !!id);
+
+      let userNamesById: Record<string, string | null> = {};
+
+      if (adhocUserIds.length > 0) {
+        const users = await prisma.user.findMany({
+          where: { id: { in: adhocUserIds } },
+          select: { id: true, name: true },
+        });
+
+        for (const u of users) {
+          userNamesById[u.id] = u.name;
+        }
+      }
+
+      topAdhocUsers = adhocGroups
+        .filter((g) => !!g.userId)
+        .map((g) => ({
+          userId: g.userId!,
+          name: userNamesById[g.userId!] ?? null,
+          adhocCount: g._count?.userId ?? 0,
+        }));
+    } else {
+      adhocShiftCount = 0;
+      topAdhocUsers = [];
+    }
+  } catch (err) {
+    console.error("Error building admin dashboard:", err);
+    // fall back to defaults – page still renders
+  }
 
   return (
     <main className="flex-1">
@@ -194,7 +325,9 @@ export default async function AdminDashboardPage() {
                           {shift.userName || "Unknown"}
                         </td>
                         <td className="px-3 py-2 text-gray-700">
-                          {shift.locationName || (
+                          {shift.locationName ? (
+                            shift.locationName
+                          ) : (
                             <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800 border border-yellow-200">
                               ADHOC
                             </span>
@@ -232,7 +365,7 @@ export default async function AdminDashboardPage() {
                 ADHOC Activity
               </h2>
               <span className="text-xs text-gray-500">
-                Most ADHOC logins
+                Most ADHOC logins (last 7 days)
               </span>
             </div>
 
