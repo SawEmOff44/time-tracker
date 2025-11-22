@@ -1,6 +1,20 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useMemo, useState, FormEvent } from "react";
+
+type Employee = {
+  id: string;
+  name: string;
+  employeeCode: string | null;
+  active: boolean;
+};
+
+type Location = {
+  id: string;
+  name: string;
+  code: string;
+  active: boolean;
+};
 
 type Shift = {
   id: string;
@@ -8,11 +22,12 @@ type Shift = {
   locationId: string | null;
   clockIn: string;
   clockOut: string | null;
+  notes: string | null;
   user?: {
     id: string;
     name: string;
     employeeCode: string | null;
-  } | null;
+  };
   location?: {
     id: string;
     name: string;
@@ -20,24 +35,33 @@ type Shift = {
   } | null;
 };
 
-type Employee = {
-  id: string;
-  name: string;
-  employeeCode: string | null;
-};
+function formatDateTime(dt: string | null) {
+  if (!dt) return "";
+  const d = new Date(dt);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
 
-type Location = {
-  id: string;
-  name: string;
-};
+function toDateTimeLocalValue(dt: string | null): string {
+  if (!dt) return "";
+  const d = new Date(dt);
+  if (isNaN(d.getTime())) return "";
+  const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+  const year = d.getFullYear();
+  const month = pad(d.getMonth() + 1);
+  const day = pad(d.getDate());
+  const hours = pad(d.getHours());
+  const minutes = pad(d.getMinutes());
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
 
-function safeHoursBetween(startISO: string, endISO: string | null): number | null {
-  if (!endISO) return null;
-  const start = new Date(startISO);
-  const end = new Date(endISO);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
-  const ms = end.getTime() - start.getTime();
-  if (ms <= 0) return null;
+function diffHours(clockIn: string, clockOut: string | null): number | null {
+  if (!clockIn || !clockOut) return null;
+  const start = new Date(clockIn).getTime();
+  const end = new Date(clockOut).getTime();
+  if (isNaN(start) || isNaN(end)) return null;
+  const ms = end - start;
+  if (ms <= 0) return 0;
   return ms / (1000 * 60 * 60);
 }
 
@@ -45,33 +69,27 @@ export default function ShiftsPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Manual shift fields
-  const [employeeId, setEmployeeId] = useState("");
-  const [locationId, setLocationId] = useState("");
-  const [clockIn, setClockIn] = useState("");
-  const [clockOut, setClockOut] = useState("");
+  // Filters
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [filterEmployeeId, setFilterEmployeeId] = useState("");
+  const [filterLocationId, setFilterLocationId] = useState("");
 
-  async function loadShifts() {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await fetch("/api/admin/shifts");
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to load shifts");
-      }
-      setShifts(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to load shifts");
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Editing
+  const [editingShift, setEditingShift] = useState<Shift | null>(null);
+  const [editClockIn, setEditClockIn] = useState("");
+  const [editClockOut, setEditClockOut] = useState("");
+  const [editLocationId, setEditLocationId] = useState<string>("");
+  const [editNotes, setEditNotes] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // ---------------------------
+  // Load employees & locations
+  // ---------------------------
   async function loadEmployeesAndLocations() {
     try {
       const [empRes, locRes] = await Promise.all([
@@ -92,252 +110,409 @@ export default function ShiftsPage() {
       setEmployees(empData);
       setLocations(locData);
     } catch (err: any) {
-      setError(err.message || "Failed to load supporting data");
+      console.error(err);
+      setError(err.message || "Failed to load employees/locations");
     }
   }
 
-  useEffect(() => {
-    loadShifts();
-    loadEmployeesAndLocations();
-  }, []);
-
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
+  // ---------------------------
+  // Load shifts with filters
+  // ---------------------------
+  async function loadShifts() {
+    setLoading(true);
     setError(null);
 
     try {
-      if (!employeeId) {
-        throw new Error("Employee is required.");
-      }
-      if (!clockIn) {
-        throw new Error("Clock In is required.");
-      }
+      const params = new URLSearchParams();
 
-      const start = new Date(clockIn);
-      if (Number.isNaN(start.getTime())) {
-        throw new Error(
-          "Clock In must be a valid datetime, e.g. 2025-01-01T08:00:00"
-        );
+      if (fromDate) {
+        // Convert date-only to an ISO so backend can just new Date()
+        params.set(fromDateKey, new Date(fromDate + "T00:00:00").toISOString());
       }
-
-      let endISO: string | null = null;
-      if (clockOut) {
-        const end = new Date(clockOut);
-        if (Number.isNaN(end.getTime())) {
-          throw new Error(
-            "Clock Out must be a valid datetime, e.g. 2025-01-01T17:00:00"
-          );
-        }
-        endISO = end.toISOString();
+      if (toDate) {
+        params.set(toDateKey, new Date(toDate + "T23:59:59").toISOString());
+      }
+      if (filterEmployeeId) {
+        params.set("employeeId", filterEmployeeId);
+      }
+      if (filterLocationId) {
+        params.set("locationId", filterLocationId);
       }
 
-      const res = await fetch("/api/admin/shifts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          employeeId,           // UI name
-          locationId: locationId || null,
-          clockIn: start.toISOString(),
-          clockOut: endISO,
-        }),
-      });
+      // To keep things explicit:
+      const query = params.toString();
+      const url = query ? `/api/shifts?${query}` : "/api/shifts";
 
+      const res = await fetch(url);
       const data = await res.json();
+
       if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to create shift");
+        throw new Error(data.error || "Failed to load shifts");
       }
 
-      setEmployeeId("");
-      setLocationId("");
-      setClockIn("");
-      setClockOut("");
-      await loadShifts();
+      setShifts(data);
     } catch (err: any) {
-      setError(
-        err.message || "Failed to create shift (check date/time format)."
-      );
+      console.error(err);
+      setError(err.message || "Failed to load shifts");
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   }
 
+  // NOTE: these keys must match the API implementation above
+  const fromDateKey = "from";
+  const toDateKey = "to";
+
+  useEffect(() => {
+    (async () => {
+      await loadEmployeesAndLocations();
+      await loadShifts();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---------------------------
+  // Filter submit
+  // ---------------------------
+  function handleFilterSubmit(e: FormEvent) {
+    e.preventDefault();
+    loadShifts();
+  }
+
+  // ---------------------------
+  // Open edit form
+  // ---------------------------
+  function startEdit(shift: Shift) {
+    setEditingShift(shift);
+    setEditClockIn(toDateTimeLocalValue(shift.clockIn));
+    setEditClockOut(toDateTimeLocalValue(shift.clockOut));
+    setEditLocationId(shift.locationId || "");
+    setEditNotes(shift.notes || "");
+  }
+
+  // ---------------------------
+  // Save edit
+  // ---------------------------
+  async function handleEditSave(e: FormEvent) {
+    e.preventDefault();
+    if (!editingShift) return;
+
+    setSavingEdit(true);
+    setError(null);
+
+    try {
+      const payload: any = {};
+
+      if (editClockIn) {
+        payload.clockIn = new Date(editClockIn).toISOString();
+      }
+      if (editClockOut) {
+        payload.clockOut = new Date(editClockOut).toISOString();
+      } else {
+        payload.clockOut = null;
+      }
+
+      payload.locationId = editLocationId || null;
+      payload.notes = editNotes;
+
+      const res = await fetch(`/api/admin/shifts/${editingShift.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to update shift");
+      }
+
+      setEditingShift(null);
+      await loadShifts();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to update shift");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  // ---------------------------
+  // Delete shift
+  // ---------------------------
+  async function handleDelete(id: string) {
+    const shift = shifts.find((s) => s.id === id);
+    const label = shift
+      ? `${shift.user?.name ?? "Unknown"} @ ${shift.location?.name ?? "Unknown"}`
+      : id;
+
+    const ok = window.confirm(`Delete this shift for "${label}"?`);
+    if (!ok) return;
+
+    setDeletingId(id);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/admin/shifts/${id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Failed to delete shift");
+      }
+
+      await loadShifts();
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to delete shift");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  const totalHours = useMemo(() => {
+    let sum = 0;
+    for (const s of shifts) {
+      const h = diffHours(s.clockIn, s.clockOut);
+      if (h && h > 0) sum += h;
+    }
+    return sum;
+  }, [shifts]);
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">Shifts</h1>
-          <p className="text-sm text-gray-600">
-            Review and create manual shift entries.
-          </p>
+    <div className="max-w-6xl mx-auto py-10 space-y-8">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Shifts</h1>
+        <div className="text-sm text-gray-600">
+          Total hours in view:{" "}
+          <span className="font-semibold">
+            {totalHours.toFixed(2)}
+          </span>
         </div>
       </div>
 
+      {/* Error */}
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="bg-red-100 text-red-800 px-4 py-2 rounded">
           {error}
         </div>
       )}
 
-      {/* Manual shift creation */}
+      {/* Filters */}
       <form
-        onSubmit={handleCreate}
-        className="bg-white border rounded p-4 space-y-3"
+        onSubmit={handleFilterSubmit}
+        className="bg-white shadow rounded p-4 grid grid-cols-1 md:grid-cols-4 gap-4"
       >
-        <h2 className="font-semibold mb-1">Create Manual Shift</h2>
-        <p className="text-xs text-gray-500">
-          Use full datetime format, e.g.{" "}
-          <span className="font-mono">2025-01-01T08:00:00</span>.
-        </p>
-        <div className="grid md:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-xs font-medium mb-1">Employee</label>
-            <select
-              className="border rounded px-2 py-1 w-full text-sm"
-              value={employeeId}
-              onChange={(e) => setEmployeeId(e.target.value)}
-              required
-            >
-              <option value="">Select employee...</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.name}
-                  {e.employeeCode ? ` (${e.employeeCode})` : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium mb-1">Location</label>
-            <select
-              className="border rounded px-2 py-1 w-full text-sm"
-              value={locationId}
-              onChange={(e) => setLocationId(e.target.value)}
-            >
-              <option value="">(none)</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium mb-1">
-              Clock In (local)
-            </label>
-            <input
-              className="border rounded px-2 py-1 w-full text-xs font-mono"
-              placeholder="2025-01-01T08:00:00"
-              value={clockIn}
-              onChange={(e) => setClockIn(e.target.value)}
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium mb-1">
-              Clock Out (optional)
-            </label>
-            <input
-              className="border rounded px-2 py-1 w-full text-xs font-mono"
-              placeholder="2025-01-01T17:00:00"
-              value={clockOut}
-              onChange={(e) => setClockOut(e.target.value)}
-            />
-          </div>
+        <div>
+          <label className="text-sm font-medium">From Date</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1 w-full"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+          />
         </div>
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="mt-2 px-4 py-2 rounded bg-black text-white text-sm font-semibold disabled:opacity-60"
-        >
-          {saving ? "Saving..." : "Create Shift"}
-        </button>
+        <div>
+          <label className="text-sm font-medium">To Date</label>
+          <input
+            type="date"
+            className="border rounded px-2 py-1 w-full"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+          />
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Employee</label>
+          <select
+            className="border rounded px-2 py-1 w-full"
+            value={filterEmployeeId}
+            onChange={(e) => setFilterEmployeeId(e.target.value)}
+          >
+            <option value="">All</option>
+            {employees.map((emp) => (
+              <option key={emp.id} value={emp.id}>
+                {emp.name} {emp.employeeCode ? `(${emp.employeeCode})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Location</label>
+          <select
+            className="border rounded px-2 py-1 w-full"
+            value={filterLocationId}
+            onChange={(e) => setFilterLocationId(e.target.value)}
+          >
+            <option value="">All</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.name} ({loc.code})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="md:col-span-4 flex justify-end">
+          <button
+            type="submit"
+            className="px-4 py-2 rounded bg-black text-white text-sm"
+          >
+            Apply Filters
+          </button>
+        </div>
       </form>
 
-      {/* Shifts table */}
-      <div className="bg-white border rounded overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Employee
-              </th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Location
-              </th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Clock In
-              </th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Clock Out
-              </th>
-              <th className="px-3 py-2 text-right font-semibold text-gray-700">
-                Hours
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td
-                  colSpan={5}
-                  className="px-3 py-3 text-center text-gray-400"
-                >
-                  Loading shifts...
-                </td>
-              </tr>
-            ) : shifts.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={5}
-                  className="px-3 py-3 text-center text-gray-400"
-                >
-                  No shifts found yet.
-                </td>
-              </tr>
-            ) : (
-              shifts.map((s) => {
-                const hrs = safeHoursBetween(s.clockIn, s.clockOut);
-                return (
-                  <tr key={s.id} className="border-b last:border-b-0">
-                    <td className="px-3 py-2">
-                      <div className="font-medium">
-                        {s.user?.name || "Unknown"}
-                      </div>
-                      {s.user?.employeeCode && (
-                        <div className="text-xs text-gray-500">
-                          {s.user.employeeCode}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {s.location?.name || (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {s.clockIn}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">
-                      {s.clockOut || (
-                        <span className="text-gray-400">open</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">
-                      {hrs == null ? "—" : hrs.toFixed(2)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      {/* Shifts Table */}
+      <div className="bg-white shadow rounded p-4">
+        {loading ? (
+          <p>Loading shifts...</p>
+        ) : shifts.length === 0 ? (
+          <p className="text-sm text-gray-500">No shifts found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-2 px-2">Employee</th>
+                  <th className="text-left py-2 px-2">Location</th>
+                  <th className="text-left py-2 px-2">Clock In</th>
+                  <th className="text-left py-2 px-2">Clock Out</th>
+                  <th className="text-right py-2 px-2">Hours</th>
+                  <th className="text-left py-2 px-2">Notes</th>
+                  <th className="text-right py-2 px-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shifts.map((s) => {
+                  const h = diffHours(s.clockIn, s.clockOut);
+                  return (
+                    <tr key={s.id} className="border-b last:border-0">
+                      <td className="py-1 px-2">
+                        {s.user?.name ?? "Unknown"}
+                        {s.user?.employeeCode
+                          ? ` (${s.user.employeeCode})`
+                          : ""}
+                      </td>
+                      <td className="py-1 px-2">
+                        {s.location?.name ?? "Unknown"}
+                      </td>
+                      <td className="py-1 px-2">
+                        {formatDateTime(s.clockIn)}
+                      </td>
+                      <td className="py-1 px-2">
+                        {formatDateTime(s.clockOut)}
+                      </td>
+                      <td className="py-1 px-2 text-right">
+                        {h != null ? h.toFixed(2) : "-"}
+                      </td>
+                      <td className="py-1 px-2 max-w-xs truncate">
+                        {s.notes || ""}
+                      </td>
+                      <td className="py-1 px-2 text-right space-x-2">
+                        <button
+                          onClick={() => startEdit(s)}
+                          className="text-xs px-2 py-1 border rounded"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(s.id)}
+                          disabled={deletingId === s.id}
+                          className="text-xs px-2 py-1 border border-red-500 text-red-600 rounded disabled:opacity-50"
+                        >
+                          {deletingId === s.id ? "Deleting..." : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      {/* Edit Panel */}
+      {editingShift && (
+        <form
+          onSubmit={handleEditSave}
+          className="bg-white shadow rounded p-4 space-y-3"
+        >
+          <h2 className="text-lg font-semibold">
+            Edit Shift – {editingShift.user?.name ?? "Unknown"}
+          </h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium">Clock In</label>
+              <input
+                type="datetime-local"
+                className="border rounded px-2 py-1 w-full"
+                value={editClockIn}
+                onChange={(e) => setEditClockIn(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium">Clock Out</label>
+              <input
+                type="datetime-local"
+                className="border rounded px-2 py-1 w-full"
+                value={editClockOut}
+                onChange={(e) => setEditClockOut(e.target.value)}
+              />
+              <p className="text-xs text-gray-500">
+                Leave blank to keep shift open (no clock out yet).
+              </p>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Location</label>
+              <select
+                className="border rounded px-2 py-1 w-full"
+                value={editLocationId}
+                onChange={(e) => setEditLocationId(e.target.value)}
+              >
+                <option value="">(None)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name} ({loc.code})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Notes</label>
+              <textarea
+                className="border rounded px-2 py-1 w-full"
+                rows={2}
+                value={editNotes}
+                onChange={(e) => setEditNotes(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setEditingShift(null)}
+              className="px-4 py-2 border rounded text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={savingEdit}
+              className="px-4 py-2 bg-black text-white rounded text-sm disabled:opacity-50"
+            >
+              {savingEdit ? "Saving..." : "Save Changes"}
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }
