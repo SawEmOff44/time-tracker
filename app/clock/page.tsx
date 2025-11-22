@@ -1,65 +1,24 @@
 "use client";
 
-import { useEffect, useState } from "react";
+export const dynamic = "force-dynamic";
+
+import { useState } from "react";
 import Image from "next/image";
 
 type ApiResponse = {
-  status?: string;
+  status?: "clocked_in" | "clocked_out" | string;
   message?: string;
   shift?: any;
   error?: string;
-};
-
-type Location = {
-  id: string;
-  name: string;
-  code: string;
-  lat: number;
-  lng: number;
-  radiusMeters: number;
+  [key: string]: any; // allow extra fields from API
 };
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
-  const [locationId, setLocationId] = useState<string>("");
-  const [locations, setLocations] = useState<Location[]>([]);
-  const [locLoading, setLocLoading] = useState(false);
-  const [locError, setLocError] = useState<string | null>(null);
-
   const [loading, setLoading] = useState(false);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
-
-  // Load locations
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadLocations() {
-      setLocLoading(true);
-      setLocError(null);
-      try {
-        const res = await fetch("/api/locations");
-        const data = await res.json();
-
-        if (!res.ok) throw new Error(data.error || "Failed to load locations");
-
-        if (!cancelled) {
-          setLocations(data);
-          if (data.length > 0 && !locationId) setLocationId(data[0].id);
-        }
-      } catch (err: any) {
-        if (!cancelled) setLocError(err.message);
-      } finally {
-        if (!cancelled) setLocLoading(false);
-      }
-    }
-
-    loadLocations();
-    return () => {
-      cancelled = true;
-    };
-  }, [locationId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -68,13 +27,10 @@ export default function ClockPage() {
     setGpsStatus(null);
 
     if (!navigator.geolocation) {
-      setResponse({ status: "error", error: "Location not supported." });
-      setLoading(false);
-      return;
-    }
-
-    if (!locationId) {
-      setResponse({ status: "error", error: "Select a location first." });
+      setResponse({
+        status: "clocked_out",
+        error: "Location not supported on this device.",
+      });
       setLoading(false);
       return;
     }
@@ -84,54 +40,85 @@ export default function ClockPage() {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
 
-        setGpsStatus(`GPS OK: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+        setGpsStatus(
+          `Got GPS location: lat=${lat.toFixed(5)}, lng=${lng.toFixed(5)}`
+        );
 
         try {
           const res = await fetch("/api/clock", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ employeeCode, pin, locationId, lat, lng }),
+            body: JSON.stringify({
+              employeeCode,
+              pin,
+              lat,
+              lng,
+            }),
           });
 
-          const data = await res.json();
+          const data = (await res.json()) as ApiResponse;
 
           if (!res.ok) {
-            setResponse({ status: "error", error: data.error });
+            setResponse({
+              status: data.status ?? "clocked_out",
+              error: data.error || "Unknown error",
+              ...data,
+            });
           } else {
             setResponse(data);
           }
-        } catch {
+        } catch (err) {
+          console.error(err);
           setResponse({
-            status: "error",
+            status: "clocked_out",
             error: "Network error contacting the server.",
           });
         } finally {
           setLoading(false);
         }
       },
-
       (geoErr) => {
-        const errMap: Record<number, string> = {
-          1: "Location permission denied.",
-          2: "Position unavailable.",
-          3: "Location request timed out.",
-        };
+        if (geoErr.code === geoErr.PERMISSION_DENIED) {
+          setGpsStatus("Location permission denied.");
+          setResponse({
+            status: "clocked_out",
+            error: "We need location permission to clock you in/out.",
+          });
+        } else if (geoErr.code === geoErr.POSITION_UNAVAILABLE) {
+          setGpsStatus("Location unavailable.");
+          setResponse({
+            status: "clocked_out",
+            error: "Could not determine your location.",
+          });
+        } else if (geoErr.code === geoErr.TIMEOUT) {
+          setGpsStatus("Location request timed out.");
+          setResponse({
+            status: "clocked_out",
+            error: "Location request timed out. Try again.",
+          });
+        } else {
+          setGpsStatus("Unknown GPS error.");
+          setResponse({
+            status: "clocked_out",
+            error: "Unknown GPS error occurred.",
+          });
+        }
 
-        setGpsStatus(errMap[geoErr.code] || "Unknown GPS error");
-        setResponse({ status: "error", error: errMap[geoErr.code] });
         setLoading(false);
       },
-
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+      }
     );
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4 text-center">
-
-        {/* LOGO - centered */}
-        <div className="w-full flex justify-center mb-4">
+    <main className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4">
+        {/* Logo centered */}
+        <div className="w-full flex justify-center mb-2">
           <Image
             src="/rhinehart-logo.jpeg"
             alt="Rhinehart Co. Logo"
@@ -142,45 +129,12 @@ export default function ClockPage() {
           />
         </div>
 
-        <h1 className="text-2xl font-bold">Clock In / Out</h1>
-        <p className="text-sm text-gray-600">
-          GPS is required for clocking in/out.
+        <h1 className="text-2xl font-bold text-center">Clock In / Out</h1>
+        <p className="text-sm text-gray-600 text-center">
+          GPS is required. Your job site is auto-detected from your location.
         </p>
 
-        {/* Error if locations fail */}
-        {locError && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">
-            {locError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} className="space-y-4 text-left">
-
-          {/* Location picker */}
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Location / Job Site
-            </label>
-            <select
-              className="border rounded px-2 py-1 w-full"
-              value={locationId}
-              onChange={(e) => setLocationId(e.target.value)}
-              disabled={locLoading || locations.length === 0}
-            >
-              {locLoading && <option>Loading...</option>}
-              {!locLoading && locations.length === 0 && (
-                <option>No locations available</option>
-              )}
-              {!locLoading &&
-                locations.map((loc) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.name} ({loc.code})
-                  </option>
-                ))}
-            </select>
-          </div>
-
-          {/* Employee code */}
+        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div>
             <label className="block text-sm font-medium mb-1">
               Employee Code
@@ -194,7 +148,6 @@ export default function ClockPage() {
             />
           </div>
 
-          {/* PIN */}
           <div>
             <label className="block text-sm font-medium mb-1">PIN</label>
             <input
@@ -206,10 +159,9 @@ export default function ClockPage() {
             />
           </div>
 
-          {/* Submit button */}
           <button
             type="submit"
-            disabled={loading || locLoading || locations.length === 0}
+            disabled={loading}
             className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
           >
             {loading ? "Checking location..." : "Clock In / Out"}
@@ -223,19 +175,52 @@ export default function ClockPage() {
           </div>
         )}
 
-        {/* API Response */}
-        <div className="mt-4 text-left">
+        {/* Simple summary */}
+        {response && (
+          <div className="mt-3 text-sm">
+            {response.error ? (
+              <div className="text-red-600 font-medium">
+                Error: {response.error}
+              </div>
+            ) : (
+              <>
+                {response.status && (
+                  <div className="font-semibold">
+                    Status:{" "}
+                    {response.status === "clocked_in"
+                      ? "Clocked IN"
+                      : response.status === "clocked_out"
+                      ? "Clocked OUT"
+                      : response.status}
+                  </div>
+                )}
+                {response.shift && (
+                  <div className="mt-1 text-xs text-gray-700">
+                    <div>
+                      Clock In:{" "}
+                      {response.shift.clockIn
+                        ? new Date(response.shift.clockIn).toLocaleString()
+                        : "—"}
+                    </div>
+                    <div>
+                      Clock Out:{" "}
+                      {response.shift.clockOut
+                        ? new Date(response.shift.clockOut).toLocaleString()
+                        : "—"}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Raw API Response for debugging */}
+        <div className="mt-4">
           <h2 className="text-sm font-semibold mb-1">API Response</h2>
           <div className="border rounded px-2 py-2 text-xs bg-gray-50 min-h-[60px] whitespace-pre-wrap">
             {response ? (
-              <>
-                {response.error && (
-                  <div className="text-red-600 mb-1">
-                    Error: {response.error}
-                  </div>
-                )}
-                <code>{JSON.stringify(response, null, 2)}</code>
-              </>
+              <code>{JSON.stringify(response, null, 2)}</code>
             ) : (
               <span className="text-gray-400">
                 Submit the form to see the response.

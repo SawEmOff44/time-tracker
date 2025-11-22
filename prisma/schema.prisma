@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -7,50 +9,65 @@ generator client {
   provider = "prisma-client-js"
 }
 
-model User {
-  id               String   @id @default(cuid())
-  name             String
-  employeeCode     String?  @unique
-  role             Role     @default(EMPLOYEE)
-  email            String?  @unique
-  pinHash          String?
-  active           Boolean  @default(true)
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
 
-  shifts           Shift[]
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  employeeCode  String?  @unique
+  role          Role     @default(EMPLOYEE)
+  email         String?
+  pinHash       String?
+  active        Boolean  @default(true)
+
+  defaultLocationId String?
+  defaultLocation   Location? @relation("UserDefaultLocation", fields: [defaultLocationId], references: [id])
+
+  shifts       Shift[]
+
+  createdAt    DateTime @default(now())
+  // REMOVE this line if present:
+  // updatedAt    DateTime @updatedAt
 }
 
 model Location {
-  id            String   @id @default(cuid())
-  name          String
-  code          String   @unique
-  lat           Float
-  lng           Float
-  radiusMeters  Int      @default(200)
-  active        Boolean  @default(true)
+  id           String   @id @default(cuid())
+  name         String
+  code         String   @unique
+  lat          Float
+  lng          Float
+  radiusMeters Float
+  active       Boolean  @default(true)
 
-  shifts        Shift[]
+  shifts       Shift[]
+  defaultUsers User[]   @relation("UserDefaultLocation")
+
+  createdAt    DateTime @default(now())
+  // REMOVE: updatedAt
 }
 
 model Shift {
-  id          String       @id @default(cuid())
-  user        User         @relation(fields: [userId], references: [id])
+  id          String   @id @default(cuid())
+
   userId      String
-  location    Location     @relation(fields: [locationId], references: [id])
-  locationId  String
+  locationId  String?
+
   clockIn     DateTime
   clockOut    DateTime?
-  status      ShiftStatus  @default(OPEN)
-}
 
-enum Role {
-  EMPLOYEE
-  MANAGER
-  ADMIN
-}
+  clockInLat   Float?
+  clockInLng   Float?
+  clockOutLat  Float?
+  clockOutLng  Float?
 
-enum ShiftStatus {
-  OPEN
-  CLOSED
-  ADJUSTED
-  APPROVED
+  notes       String?
+
+  user        User      @relation(fields: [userId], references: [id])
+  location    Location? @relation(fields: [locationId], references: [id])
+
+  createdAt   DateTime @default(now())
+  // REMOVE: updatedAt
 }
