@@ -1,82 +1,69 @@
 // app/admin/(protected)/layout.tsx
 
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import Image from "next/image";
+import type { ReactNode } from "react";
 import Link from "next/link";
+import AdminLogoutButton from "@/app/admin/AdminLogoutButton";
 
-export const dynamic = "force-dynamic";
-
-const navItems = [
-  { href: "/admin", label: "Dashboard" },
-  { href: "/admin/employees", label: "Employees" },
-  { href: "/admin/locations", label: "Locations" },
-  { href: "/admin/shifts", label: "Shifts" },
-  { href: "/admin/payroll", label: "Payroll" },
-];
-
-export default async function ProtectedAdminLayout({
+export default function ProtectedAdminLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
-  const cookieStore = cookies();
-  const session = cookieStore.get("admin_session")?.value;
+  return (
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-4">
 
-  if (!session) {
-    redirect("/admin/login");
-  }
+      {/* Header Row */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">
+            Admin Panel
+          </h1>
+          <p className="text-xs text-gray-500">
+            Manage employees, locations, shifts, payroll
+          </p>
+        </div>
+
+        <AdminLogoutButton />
+      </div>
+
+      {/* Admin Navigation */}
+      <div className="border-b pb-3">
+        <nav className="flex gap-3 text-sm">
+          <AdminNavLink href="/admin" label="Dashboard" />
+          <AdminNavLink href="/admin/employees" label="Employees" />
+          <AdminNavLink href="/admin/locations" label="Locations" />
+          <AdminNavLink href="/admin/shifts" label="Shifts" />
+          <AdminNavLink href="/admin/payroll" label="Payroll" />
+        </nav>
+      </div>
+
+      <div className="pt-3">{children}</div>
+    </div>
+  );
+}
+
+
+// SMALL client-only component for active link highlighting
+function AdminNavLink({ href, label }: { href: string; label: string }) {
+  "use client";
+  const { usePathname } = require("next/navigation");
+  const pathname = usePathname();
+
+  const isActive =
+    pathname === href ||
+    (href !== "/admin" && pathname.startsWith(href));
 
   return (
-    <div className="min-h-screen bg-[#f5f4f3] flex">
-      {/* Sidebar */}
-      <aside className="w-64 bg-[#1f1f20] text-gray-100 flex flex-col">
-        {/* Logo / Brand */}
-        <div className="h-20 flex items-center justify-center border-b border-white/10 px-4">
-          <div className="flex items-center gap-2">
-            <div className="relative h-10 w-32">
-              <Image
-                src="/rhinehart-logo.jpeg"
-                alt="Rhinehart Co. Logo"
-                fill
-                className="object-contain"
-                priority
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Nav */}
-        <nav className="flex-1 py-4 space-y-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="
-                block px-4 py-2 text-sm font-medium
-                text-gray-200 hover:text-white hover:bg-white/10
-                transition-colors
-              "
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-
-        {/* Footer / Small text */}
-        <div className="p-4 text-[11px] text-gray-500 border-t border-white/10">
-          <div>Rhinehart Time</div>
-          <div className="text-gray-400">
-            © {new Date().getFullYear()} Rhinehart Co.
-          </div>
-        </div>
-      </aside>
-
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col">
-        {/* You can add a top bar here later if you want */}
-        {children}
-      </div>
-    </div>
+    <Link
+      href={href}
+      className={
+        "px-3 py-1.5 rounded-md text-xs font-medium transition-colors " +
+        (isActive
+          ? "bg-black text-white"
+          : "text-gray-600 hover:text-black hover:bg-gray-100")
+      }
+    >
+      {label}
+    </Link>
   );
 }

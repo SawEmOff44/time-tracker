@@ -1,17 +1,15 @@
 // app/api/admin/logout/route.ts
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
-export async function GET() {
-  const res = NextResponse.redirect("/admin/login");
-  res.cookies.set("admin_session", "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",   // <-- must match login
-    maxAge: 0,
+export async function POST() {
+  const cookieStore = cookies();
+
+  // Remove the admin session cookie
+  cookieStore.set("admin_session", "", {
+    expires: new Date(0),
+    path: "/",
   });
-  return res;
+
+  return NextResponse.json({ success: true });
 }
