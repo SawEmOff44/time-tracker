@@ -1,263 +1,275 @@
 // app/admin/(protected)/page.tsx
-import { prisma } from "@/lib/prisma";
+export const dynamic = "force-dynamic";
 
-function getStartOfToday() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+type RecentShift = {
+  id: string;
+  userName: string | null;
+  locationName: string | null;
+  clockIn: string | null;
+  clockOut: string | null;
+  isAdhoc?: boolean;
+};
+
+type TopAdhocUser = {
+  userId: string;
+  name: string | null;
+  adhocCount: number;
+};
+
+type DashboardResponse = {
+  totalEmployees?: number;
+  activeEmployees?: number;
+  totalLocations?: number;
+  activeLocations?: number;
+  totalShiftsToday?: number;
+  totalHoursThisWeek?: number;
+  adhocShiftCount?: number;
+  recentShifts?: RecentShift[];
+  topAdhocUsers?: TopAdhocUser[];
+};
+
+async function getDashboardData(): Promise<DashboardResponse> {
+  const res = await fetch("/api/admin/dashboard", {
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    console.error("Failed to load dashboard:", res.status, await res.text());
+    return {};
+  }
+
+  return (await res.json()) as DashboardResponse;
 }
 
-function getStartOfDaysAgo(days: number) {
-  const now = new Date();
-  const d = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() - days,
-    0,
-    0,
-    0,
-    0
-  );
-  return d;
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 export default async function AdminDashboardPage() {
-  // Basic stats
-  const [employeeCount, locationCount] = await Promise.all([
-    prisma.user.count({
-      where: { active: true },
-    }),
-    prisma.location.count({
-      where: { active: true },
-    }),
-  ]);
+  const data = await getDashboardData();
 
-  const startOfToday = getStartOfToday();
+  const totalEmployees = data.totalEmployees ?? 0;
+  const activeEmployees = data.activeEmployees ?? 0;
+  const totalLocations = data.totalLocations ?? 0;
+  const activeLocations = data.activeLocations ?? 0;
+  const totalShiftsToday = data.totalShiftsToday ?? 0;
+  const totalHoursThisWeek = data.totalHoursThisWeek ?? 0;
+  const adhocShiftCount = data.adhocShiftCount ?? 0;
 
-  // Today's shifts for total hours + recent
-  const todayShifts = await prisma.shift.findMany({
-    where: {
-      clockIn: {
-        gte: startOfToday,
-      },
-    },
-    orderBy: { clockIn: "desc" },
-    include: {
-      user: {
-        select: { id: true, name: true, employeeCode: true },
-      },
-      location: {
-        select: { id: true, name: true, code: true },
-      },
-    },
-  });
-
-  const totalHoursToday = todayShifts.reduce((sum, s) => {
-    const start = s.clockIn;
-    const end = s.clockOut ?? new Date();
-    const diffMs = end.getTime() - start.getTime();
-    const hours = diffMs / (1000 * 60 * 60);
-    return sum + (hours > 0 ? hours : 0);
-  }, 0);
-
-  const recentShifts = await prisma.shift.findMany({
-    take: 10,
-    orderBy: { clockIn: "desc" },
-    include: {
-      user: {
-        select: { id: true, name: true, employeeCode: true },
-      },
-      location: {
-        select: { id: true, name: true, code: true },
-      },
-    },
-  });
-
-  // ADHOC review (last 14 days)
-  const adhocLocation = await prisma.location.findFirst({
-    where: { code: "ADHOC" },
-  });
-
-  let adhocTotal = 0;
-  let adhocByUser: {
-    userId: string | null;
-    name: string | null;
-    employeeCode: string | null;
-    count: number;
-  }[] = [];
-
-  if (adhocLocation) {
-    const fourteenDaysAgo = getStartOfDaysAgo(14);
-
-    const adhocShifts = await prisma.shift.findMany({
-      where: {
-        locationId: adhocLocation.id,
-        clockIn: {
-          gte: fourteenDaysAgo,
-        },
-      },
-      include: {
-        user: {
-          select: { id: true, name: true, employeeCode: true },
-        },
-      },
-    });
-
-    adhocTotal = adhocShifts.length;
-
-    const map = new Map<
-      string | null,
-      { userId: string | null; name: string | null; employeeCode: string | null; count: number }
-    >();
-
-    for (const s of adhocShifts) {
-      const key = s.user?.id ?? null;
-      const existing = map.get(key);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        map.set(key, {
-          userId: s.user?.id ?? null,
-          name: s.user?.name ?? null,
-          employeeCode: s.user?.employeeCode ?? null,
-          count: 1,
-        });
-      }
-    }
-
-    adhocByUser = Array.from(map.values()).sort((a, b) => b.count - a.count);
-  }
+  const recentShifts = data.recentShifts ?? [];
+  const topAdhocUsers = data.topAdhocUsers ?? [];
 
   return (
-    <main className="p-6 space-y-6 max-w-6xl mx-auto">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
-          <p className="text-sm text-gray-600">
-            Overview of today&apos;s activity and ADHOC clock-ins.
+    <main className="flex-1">
+      <div className="max-w-6xl mx-auto px-6 py-8 space-y-8">
+        {/* Page header */}
+        <header className="space-y-1">
+          <h1 className="text-2xl font-semibold text-gray-900">
+            Admin Dashboard
+          </h1>
+          <p className="text-sm text-gray-500">
+            At-a-glance view of workforce activity, locations, and ADHOC usage.
           </p>
-        </div>
-      </header>
+        </header>
 
-      {/* Top stats row */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-lg shadow-sm p-4">
-          <div className="text-xs text-gray-500">Active Employees</div>
-          <div className="text-2xl font-semibold mt-1">{employeeCount}</div>
-        </div>
-        <div className="bg-white rounded-lg shadow-sm p-4">
-          <div className="text-xs text-gray-500">Active Locations</div>
-          <div className="text-2xl font-semibold mt-1">{locationCount}</div>
-        </div>
-        <div className="bg-white rounded-lg shadow-sm p-4">
-          <div className="text-xs text-gray-500">Total Hours Today</div>
-          <div className="text-2xl font-semibold mt-1">
-            {totalHoursToday.toFixed(2)}
-          </div>
-        </div>
-      </section>
-
-      {/* ADHOC + Recent Shifts */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* ADHOC card */}
-        <div className="bg-white rounded-lg shadow-sm p-4 space-y-2">
-          <h2 className="text-sm font-semibold">
-            ADHOC Clock-ins (Last 14 Days)
-          </h2>
-          {adhocLocation ? (
-            <>
-              <div className="text-xs text-gray-600">
-                Total ADHOC shifts:{" "}
-                <span className="font-semibold">{adhocTotal}</span>
-              </div>
-              {adhocByUser.length === 0 ? (
-                <div className="text-sm text-gray-600 mt-2">
-                  No ADHOC shifts in the last 14 days.
-                </div>
-              ) : (
-                <div className="mt-2">
-                  <table className="min-w-full text-xs">
-                    <thead>
-                      <tr className="border-b text-[11px] text-gray-600">
-                        <th className="text-left py-1 pr-2">Employee</th>
-                        <th className="text-right py-1 pl-2">ADHOC Count</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {adhocByUser.map((u) => (
-                        <tr key={u.userId ?? "unknown"} className="border-b last:border-0">
-                          <td className="py-1 pr-2">
-                            {u.name || "(unknown)"}{" "}
-                            {u.employeeCode ? `(${u.employeeCode})` : ""}
-                          </td>
-                          <td className="py-1 pl-2 text-right font-semibold">
-                            {u.count}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  <p className="text-[11px] text-gray-500 mt-2">
-                    Employees with frequent ADHOC clock-ins may warrant a quick
-                    review in the Shifts view.
-                  </p>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="text-sm text-gray-600">
-              No ADHOC location configured yet. Create a location with code{" "}
-              <code className="bg-gray-100 px-1 py-0.5 rounded text-[11px]">
-                ADHOC
-              </code>{" "}
-              to track out-of-bounds clock-ins.
+        {/* Summary cards */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          {/* Employees */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col justify-between">
+            <div className="text-xs font-medium uppercase text-gray-500 tracking-wide">
+              Employees
             </div>
-          )}
-        </div>
+            <div className="mt-2 flex items-baseline justify-between">
+              <div className="text-2xl font-semibold text-gray-900">
+                {activeEmployees}
+              </div>
+              <div className="text-xs text-gray-400">
+                {totalEmployees} total
+              </div>
+            </div>
+          </div>
 
-        {/* Recent shifts */}
-        <div className="bg-white rounded-lg shadow-sm p-4 space-y-2">
-          <h2 className="text-sm font-semibold">Recent Shifts</h2>
-          {recentShifts.length === 0 ? (
-            <div className="text-sm text-gray-600">No recent shifts.</div>
-          ) : (
-            <ul className="divide-y text-sm">
-              {recentShifts.map((s) => {
-                const isAdhoc = s.location?.code === "ADHOC";
-                const clockIn = s.clockIn.toLocaleString();
-                const clockOut = s.clockOut
-                  ? s.clockOut.toLocaleString()
-                  : "—";
+          {/* Locations */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col justify-between">
+            <div className="text-xs font-medium uppercase text-gray-500 tracking-wide">
+              Locations
+            </div>
+            <div className="mt-2 flex items-baseline justify-between">
+              <div className="text-2xl font-semibold text-gray-900">
+                {activeLocations}
+              </div>
+              <div className="text-xs text-gray-400">
+                {totalLocations} total
+              </div>
+            </div>
+          </div>
 
-                return (
-                  <li key={s.id} className="py-2 flex items-start justify-between">
-                    <div>
-                      <div className="font-medium">
-                        {s.user?.name || "(unknown)"}{" "}
-                        {s.user?.employeeCode
-                          ? `(${s.user.employeeCode})`
-                          : ""}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        {s.location
-                          ? `${s.location.name} (${s.location.code})`
-                          : "Unknown location"}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        In: {clockIn} | Out: {clockOut}
-                      </div>
-                    </div>
-                    {isAdhoc && (
-                      <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-semibold">
-                        ADHOC
+          {/* Shifts today */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col justify-between">
+            <div className="text-xs font-medium uppercase text-gray-500 tracking-wide">
+              Shifts Today
+            </div>
+            <div className="mt-2 flex items-baseline justify-between">
+              <div className="text-2xl font-semibold text-gray-900">
+                {totalShiftsToday}
+              </div>
+              <div className="text-xs text-gray-400">
+                Today&apos;s activity
+              </div>
+            </div>
+          </div>
+
+          {/* Hours this week / ADHOC */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col justify-between">
+            <div className="text-xs font-medium uppercase text-gray-500 tracking-wide">
+              Hours &amp; ADHOC
+            </div>
+            <div className="mt-2 flex items-baseline justify-between">
+              <div className="text-2xl font-semibold text-gray-900">
+                {totalHoursThisWeek.toFixed
+                  ? totalHoursThisWeek.toFixed(1)
+                  : totalHoursThisWeek}
+              </div>
+              <div className="text-xs text-gray-400">
+                hrs this week • {adhocShiftCount} ADHOC
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Main content: Recent Shifts + Top ADHOC users */}
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          {/* Recent Shifts */}
+          <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-900">
+                Recent Shifts
+              </h2>
+              <span className="text-xs text-gray-500">
+                Last {recentShifts.length || 0} records
+              </span>
+            </div>
+
+            {recentShifts.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                No recent shifts recorded yet.
+              </p>
+            ) : (
+              <div className="-mx-3 -my-2 overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Employee
+                      </th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Location
+                      </th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Clock In
+                      </th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Clock Out
+                      </th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
+                        Type
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentShifts.map((shift) => (
+                      <tr
+                        key={shift.id}
+                        className="border-b border-gray-100 hover:bg-gray-50/70 transition-colors"
+                      >
+                        <td className="px-3 py-2 text-gray-900">
+                          {shift.userName || "Unknown"}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">
+                          {shift.locationName || (
+                            <span className="inline-flex items-center rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800 border border-yellow-200">
+                              ADHOC
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">
+                          {formatDateTime(shift.clockIn)}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">
+                          {formatDateTime(shift.clockOut)}
+                        </td>
+                        <td className="px-3 py-2">
+                          {shift.isAdhoc ? (
+                            <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 border border-red-200">
+                              ADHOC
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 border border-emerald-200">
+                              Normal
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Top ADHOC users */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-900">
+                ADHOC Activity
+              </h2>
+              <span className="text-xs text-gray-500">
+                Most ADHOC logins
+              </span>
+            </div>
+
+            {topAdhocUsers.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                No ADHOC logins detected in the current period.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {topAdhocUsers.map((u) => (
+                  <li
+                    key={u.userId}
+                    className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium text-gray-900">
+                        {u.name || "Unknown employee"}
                       </span>
-                    )}
+                      <span className="text-xs text-gray-500">
+                        ADHOC clock-ins
+                      </span>
+                    </div>
+                    <span className="inline-flex items-center justify-center rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 border border-red-200">
+                      {u.adhocCount}
+                    </span>
                   </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      </section>
+                ))}
+              </ul>
+            )}
+
+            <p className="mt-3 text-[11px] text-gray-400">
+              Use ADHOC counts as a quick compliance flag — investigate repeat
+              off-site clock-ins when needed.
+            </p>
+          </div>
+        </section>
+      </div>
     </main>
   );
 }
