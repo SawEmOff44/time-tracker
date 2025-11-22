@@ -1,12 +1,23 @@
-// app/api/admin/locations/route.ts
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { cookies } from "next/headers";
+
+// Simple admin check via cookie
+function requireAdmin() {
+  const cookieStore = cookies();
+  const session = cookieStore.get("admin_session")?.value;
+  return !!session;
+}
 
 // GET /api/admin/locations → list all locations
-export async function GET(_req: NextRequest) {
+export async function GET() {
+  if (!requireAdmin()) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const locations = await prisma.location.findMany({
       orderBy: { name: "asc" },
@@ -15,14 +26,19 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json(locations);
   } catch (err) {
     console.error("Error loading locations:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to load locations";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load locations" },
+      { status: 500 }
+    );
   }
 }
 
 // POST /api/admin/locations → create a location
 export async function POST(req: NextRequest) {
+  if (!requireAdmin()) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const body = await req.json().catch(() => null);
 
@@ -35,40 +51,45 @@ export async function POST(req: NextRequest) {
 
     const { name, code, lat, lng, radiusMeters, active } = body;
 
-    if (!name || !code || lat == null || lng == null || radiusMeters == null) {
+    const trimmedName = typeof name === "string" ? name.trim() : "";
+    const trimmedCode = typeof code === "string" ? code.trim() : "";
+
+    const parsedLat = Number(lat);
+    const parsedLng = Number(lng);
+    const parsedRadius = Number(radiusMeters);
+
+    if (!trimmedName || !trimmedCode) {
       return NextResponse.json(
-        {
-          error: "name, code, lat, lng, and radiusMeters are required",
-        },
+        { error: "name and code are required" },
         { status: 400 }
       );
     }
 
-    const latNum = Number(lat);
-    const lngNum = Number(lng);
-    const radiusNum = Number(radiusMeters);
-
-    if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) {
+    if (
+      !Number.isFinite(parsedLat) ||
+      !Number.isFinite(parsedLng)
+    ) {
       return NextResponse.json(
-        { error: "Latitude and longitude must be valid numbers" },
+        { error: "lat and lng must be valid numbers" },
         { status: 400 }
       );
     }
 
-    if (!Number.isFinite(radiusNum) || radiusNum <= 0) {
+    // ✅ ALLOW 0 (unbounded / ad-hoc job site). Only disallow negative.
+    if (!Number.isFinite(parsedRadius) || parsedRadius < 0) {
       return NextResponse.json(
-        { error: "Radius must be a positive number" },
+        { error: "radiusMeters must be a non-negative number (0 or more)" },
         { status: 400 }
       );
     }
 
     const loc = await prisma.location.create({
       data: {
-        name,
-        code,
-        lat: latNum,
-        lng: lngNum,
-        radiusMeters: radiusNum,
+        name: trimmedName,
+        code: trimmedCode,
+        lat: parsedLat,
+        lng: parsedLng,
+        radiusMeters: parsedRadius,
         active: active ?? true,
       },
     });
@@ -76,8 +97,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(loc, { status: 201 });
   } catch (err) {
     console.error("Error creating location:", err);
-    const message =
-      err instanceof Error ? err.message : "Failed to create location";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to create location" },
+      { status: 500 }
+    );
   }
 }
