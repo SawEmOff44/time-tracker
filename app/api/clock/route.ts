@@ -1,120 +1,156 @@
 // app/api/clock/route.ts
-export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-/* ------------------------- UTILS ------------------------- */
-
-function toRad(v: number) {
-  return (v * Math.PI) / 180;
+// Haversine distance in meters
+function toRad(value: number) {
+  return (value * Math.PI) / 180;
 }
 
-function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number) {
-  const R = 6371e3; // meters
-  const φ1 = toRad(lat1);
-  const φ2 = toRad(lat2);
-  const Δφ = toRad(lat2 - lat1);
-  const Δλ = toRad(lng2 - lng1);
-
+function distanceMeters(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number
+): number {
+  const R = 6371000; // Earth radius in meters
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lng2 - lng1);
   const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) *
-    Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
   return R * c;
 }
 
-/* ------------------------- MAIN ROUTE ------------------------- */
-
 export async function POST(req: NextRequest) {
   try {
-    const { employeeCode, pin, lat, lng } = await req.json();
+    const body = await req.json().catch(() => null);
 
-    if (!employeeCode || !pin || lat === undefined || lng === undefined) {
+    if (!body) {
       return NextResponse.json(
-        { error: "Missing required fields." },
+        { error: "Invalid JSON body" },
         { status: 400 }
       );
     }
 
-    /* ------------------------- 1. FETCH USER ------------------------- */
-    const user = await prisma.user.findUnique({
-      where: { employeeCode },
+    const { employeeCode, pin, lat, lng } = body;
+
+    if (
+      !employeeCode ||
+      !pin ||
+      typeof lat !== "number" ||
+      typeof lng !== "number"
+    ) {
+      return NextResponse.json(
+        { error: "employeeCode, pin, lat, and lng are required" },
+        { status: 400 }
+      );
+    }
+
+    // 1) Find active user by employeeCode
+    const user = await prisma.user.findFirst({
+      where: {
+        employeeCode,
+        active: true,
+      },
     });
 
-    if (!user || !user.active) {
+    if (!user) {
       return NextResponse.json(
         { error: "Invalid employee code or PIN" },
         { status: 401 }
       );
     }
 
-    if (user.pinHash !== pin) {
+    // 2) PIN check (using pinHash as plain PIN for now)
+    if (!user.pinHash || user.pinHash !== pin) {
       return NextResponse.json(
         { error: "Invalid employee code or PIN" },
         { status: 401 }
       );
     }
 
-    /* ------------------------- 2. FIND NEAREST LOCATION ------------------------- */
+    // 3) Find open shift (no clockOut yet)
+    const openShift = await prisma.shift.findFirst({
+      where: {
+        userId: user.id,
+        clockOut: null,
+      },
+      orderBy: { clockIn: "desc" },
+      include: {
+        user: true,
+        location: true,
+      },
+    });
 
-    const activeLocations = await prisma.location.findMany({
+    // 4) Load all active locations
+    const allLocations = await prisma.location.findMany({
       where: { active: true },
     });
 
-    let matchedLocation: { id: string } | null = null;
+    // Infer a type for locations from the query result
+    type LocationType = (typeof allLocations)[number];
 
-    for (const loc of activeLocations) {
-      const dist = distanceMeters(lat, lng, loc.lat, loc.lng);
+    const adhocLocation: LocationType | null =
+      allLocations.find((l: LocationType) => l.code === "ADHOC") ?? null;
 
-      // radiusMeters = 0 → always allow match
-      const radius = loc.radiusMeters ?? 0;
+    // Only use "normal" locations for geofence matching
+    const normalLocations: LocationType[] = allLocations.filter(
+      (l: LocationType) => l.code !== "ADHOC"
+    );
 
-      if (radius === 0 || dist <= radius) {
-        matchedLocation = { id: loc.id };
-        break;
+    let pickedLocation: LocationType | null = null;
+    let usedAdhoc = false;
+
+    // 5) Try to match a real job site by radius
+    if (normalLocations.length > 0) {
+      let best: LocationType | null = null;
+      let bestDist = Infinity;
+
+      for (const loc of normalLocations) {
+        const dist = distanceMeters(lat, lng, loc.lat, loc.lng);
+
+        if (dist <= loc.radiusMeters && dist < bestDist) {
+          best = loc;
+          bestDist = dist;
+        }
+      }
+
+      if (best) {
+        pickedLocation = best;
       }
     }
 
-    // fallback: ADHOC location entry
-    // (We could create one automatically if none exists)
-    let locationId: string | null = null;
-
-    if (matchedLocation) {
-      locationId = matchedLocation.id;
-    } else {
-      const adhoc = await prisma.location.findFirst({
-        where: { code: "ADHOC" },
-      });
-
-      if (!adhoc) {
-        // Create once
+    // 6) Fallback: use ADHOC if no real site matched
+    if (!pickedLocation) {
+      if (adhocLocation) {
+        pickedLocation = adhocLocation;
+        usedAdhoc = true;
+      } else {
+        // Create ADHOC if it doesn't exist yet, using current coords as seed
         const newAdhoc = await prisma.location.create({
           data: {
-            name: "Adhoc Job Site",
+            name: "ADHOC",
             code: "ADHOC",
-            lat: 0,
-            lng: 0,
+            lat,
+            lng,
             radiusMeters: 0,
             active: true,
           },
         });
-        locationId = newAdhoc.id;
-      } else {
-        locationId = adhoc.id;
+        pickedLocation = newAdhoc as LocationType;
+        usedAdhoc = true;
       }
     }
 
-    /* ------------------------- 3. CHECK IF USER IS CLOCKING OUT ------------------------- */
-
-    const openShift = await prisma.shift.findFirst({
-      where: { userId: user.id, clockOut: null },
-    });
-
+    // 7) If there was an open shift, this is a clock OUT
     if (openShift) {
       const updated = await prisma.shift.update({
         where: { id: openShift.id },
@@ -122,35 +158,50 @@ export async function POST(req: NextRequest) {
           clockOut: new Date(),
           clockOutLat: lat,
           clockOutLng: lng,
+          // If the open shift somehow had no location, attach our picked one
+          locationId: openShift.locationId ?? pickedLocation!.id,
+        },
+        include: {
+          user: true,
+          location: true,
         },
       });
 
       return NextResponse.json({
         status: "clocked_out",
+        message: `Clocked OUT at ${pickedLocation!.name}${
+          usedAdhoc ? " (ADHOC)" : ""
+        }`,
         shift: updated,
       });
     }
 
-    /* ------------------------- 4. CREATE NEW SHIFT ------------------------- */
-
-    const shift = await prisma.shift.create({
+    // 8) Otherwise, this is a clock IN
+    const created = await prisma.shift.create({
       data: {
         userId: user.id,
-        locationId,
+        locationId: pickedLocation!.id,
         clockIn: new Date(),
         clockInLat: lat,
         clockInLng: lng,
+      },
+      include: {
+        user: true,
+        location: true,
       },
     });
 
     return NextResponse.json({
       status: "clocked_in",
-      shift,
+      message: `Clocked IN at ${pickedLocation!.name}${
+        usedAdhoc ? " (ADHOC)" : ""
+      }`,
+      shift: created,
     });
   } catch (err) {
-    console.error("Clock route failed:", err);
+    console.error("Error in /api/clock:", err);
     return NextResponse.json(
-      { error: "Server error. Check logs." },
+      { error: "Server error while clocking in/out" },
       { status: 500 }
     );
   }
