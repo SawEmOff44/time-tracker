@@ -1,9 +1,7 @@
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
+// app/api/admin/shifts/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
+import { prisma } from "@/lib/prisma";
 
 function requireAdmin() {
   const cookieStore = cookies();
@@ -11,7 +9,8 @@ function requireAdmin() {
   return !!session;
 }
 
-// PATCH /api/admin/shifts/:id  → update a shift
+// PATCH /api/admin/shifts/:id
+// Edit clockIn / clockOut / locationId
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -20,10 +19,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const id = params.id;
-  if (!id) {
-    return NextResponse.json({ error: "Shift id is required" }, { status: 400 });
-  }
+  const { id } = params;
 
   try {
     const body = await req.json().catch(() => null);
@@ -34,58 +30,58 @@ export async function PATCH(
       );
     }
 
-    const { clockIn, clockOut, locationId, notes, userId } = body;
+    const { clockIn, clockOut, locationId } = body as {
+      clockIn?: string;
+      clockOut?: string | null;
+      locationId?: string;
+    };
 
     const data: any = {};
 
     if (clockIn) {
-      const dt = new Date(clockIn);
-      if (isNaN(dt.getTime())) {
+      const d = new Date(clockIn);
+      if (isNaN(d.getTime())) {
         return NextResponse.json(
-          { error: "Invalid clockIn datetime" },
+          { error: "Invalid clockIn value" },
           { status: 400 }
         );
       }
-      data.clockIn = dt;
+      data.clockIn = d;
     }
 
     if (clockOut !== undefined) {
       if (clockOut === null || clockOut === "") {
         data.clockOut = null;
       } else {
-        const dt = new Date(clockOut);
-        if (isNaN(dt.getTime())) {
+        const d = new Date(clockOut);
+        if (isNaN(d.getTime())) {
           return NextResponse.json(
-            { error: "Invalid clockOut datetime" },
+            { error: "Invalid clockOut value" },
             { status: 400 }
           );
         }
-        data.clockOut = dt;
+        data.clockOut = d;
       }
     }
 
-    if (locationId !== undefined) {
-      data.locationId = locationId || null;
+    if (locationId) {
+      data.locationId = locationId;
     }
 
-    if (notes !== undefined) {
-      data.notes = notes;
-    }
-
-    if (userId !== undefined) {
-      data.userId = userId;
-    }
-
-    const shift = await prisma.shift.update({
+    const updated = await prisma.shift.update({
       where: { id },
       data,
       include: {
-        user: true,
-        location: true,
+        user: {
+          select: { id: true, name: true, employeeCode: true },
+        },
+        location: {
+          select: { id: true, name: true, code: true },
+        },
       },
     });
 
-    return NextResponse.json(shift);
+    return NextResponse.json(updated);
   } catch (err) {
     console.error("Error updating shift:", err);
     return NextResponse.json(
@@ -95,7 +91,7 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/admin/shifts/:id → delete a shift
+// DELETE /api/admin/shifts/:id
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -104,16 +100,10 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const id = params.id;
-  if (!id) {
-    return NextResponse.json({ error: "Shift id is required" }, { status: 400 });
-  }
+  const { id } = params;
 
   try {
-    await prisma.shift.delete({
-      where: { id },
-    });
-
+    await prisma.shift.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error("Error deleting shift:", err);

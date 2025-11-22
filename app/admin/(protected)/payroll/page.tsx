@@ -1,247 +1,264 @@
-// app/admin/(protected)/payroll/page.tsx
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
+
+type Role = "EMPLOYEE" | "ADMIN";
+
+type User = {
+  id: string;
+  name: string;
+  employeeCode: string | null;
+  role: Role;
+};
+
+type Location = {
+  id: string;
+  name: string;
+  code: string | null;
+};
 
 type Shift = {
   id: string;
   userId: string;
+  locationId: string | null;
   clockIn: string;
   clockOut: string | null;
-  user?: {
-    name: string;
-    employeeCode: string | null;
-  } | null;
+  user: User | null;
+  location: Location | null;
 };
+
+type ApiError = string | null;
 
 type EmployeeSummary = {
   userId: string;
   name: string;
   employeeCode: string | null;
-  hours: number;
+  totalHours: number;
+  shiftCount: number;
 };
 
-function hoursBetween(startISO: string, endISO: string | null): number {
-  if (!endISO) return 0;
-  const start = new Date(startISO);
-  const end = new Date(endISO);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  const ms = end.getTime() - start.getTime();
-  if (ms <= 0) return 0;
-  return ms / (1000 * 60 * 60);
-}
-
 export default function PayrollPage() {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
   const [shifts, setShifts] = useState<Shift[]>([]);
-  const [summaries, setSummaries] = useState<EmployeeSummary[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError>(null);
 
-  // Default to current week on first load
-  useEffect(() => {
-    const today = new Date();
-    const day = today.getDay(); // 0..6
-    const diffToMonday = (day + 6) % 7;
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - diffToMonday);
+  const [fromDate, setFromDate] = useState<string>("");
+  const [toDate, setToDate] = useState<string>("");
 
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
-
-    setFrom(fmt(monday));
-    setTo(fmt(today));
-  }, []);
-
-  async function loadShifts(e?: FormEvent) {
-    if (e) e.preventDefault();
-    if (!from || !to) {
-      setError("Please pick a From and To date.");
-      return;
-    }
-
+  async function loadShifts() {
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
-
-      const params = new URLSearchParams();
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
-
-      const res = await fetch(`/api/admin/shifts?${params.toString()}`);
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to load shifts");
+      const res = await fetch("/api/shifts");
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to load shifts");
       }
-
-      const shifts: Shift[] = data;
-      setShifts(shifts);
-
-      const byEmployee = new Map<string, EmployeeSummary>();
-
-      for (const s of shifts) {
-        const hrs = hoursBetween(s.clockIn, s.clockOut);
-        if (!byEmployee.has(s.userId)) {
-          byEmployee.set(s.userId, {
-            userId: s.userId,
-            name: s.user?.name ?? "Unknown",
-            employeeCode: s.user?.employeeCode ?? null,
-            hours: 0,
-          });
-        }
-        const sum = byEmployee.get(s.userId)!;
-        sum.hours += hrs;
-      }
-
-      setSummaries(Array.from(byEmployee.values()));
+      const json = (await res.json()) as Shift[];
+      setShifts(json);
     } catch (err: any) {
-      setError(err.message || "Failed to load payroll data");
+      console.error("Error loading payroll shifts:", err);
+      setError(err.message || "Failed to load shifts");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    if (from && to) {
-      void loadShifts();
+    void loadShifts();
+  }, []);
+
+  // Default date range: last 14 days if user hasn't picked anything
+  useEffect(() => {
+    if (!fromDate && !toDate) {
+      const now = new Date();
+      const fourteenDaysAgo = new Date(
+        now.getTime() - 14 * 24 * 60 * 60 * 1000
+      );
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const mkDate = (d: Date) =>
+        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      setFromDate(mkDate(fourteenDaysAgo));
+      setToDate(mkDate(now));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [from, to]);
+  }, [fromDate, toDate]);
 
-  async function handleExport() {
-    if (!from || !to) return;
-    const params = new URLSearchParams({ from, to });
-    const url = `/api/export/shifts?${params.toString()}`;
-    window.location.href = url;
-  }
+  const filteredShifts = useMemo(() => {
+    if (!fromDate && !toDate) return shifts;
 
-  // Total hours across all employees in the range
-  const totalHours = summaries.reduce((acc, s) => acc + s.hours, 0);
+    return shifts.filter((s) => {
+      if (!s.clockOut) return false; // only completed shifts count
+      const ci = new Date(s.clockIn);
+
+      if (fromDate) {
+        const from = new Date(fromDate);
+        from.setHours(0, 0, 0, 0);
+        if (ci < from) return false;
+      }
+
+      if (toDate) {
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        if (ci > to) return false;
+      }
+
+      return true;
+    });
+  }, [shifts, fromDate, toDate]);
+
+  const summaries: EmployeeSummary[] = useMemo(() => {
+    const map = new Map<string, EmployeeSummary>();
+
+    for (const s of filteredShifts) {
+      if (!s.clockOut) continue;
+
+      const ci = new Date(s.clockIn);
+      const co = new Date(s.clockOut);
+      if (co <= ci) continue;
+
+      const diffHours =
+        (co.getTime() - ci.getTime()) / (1000 * 60 * 60);
+
+      const userId = s.userId;
+      const existing = map.get(userId);
+      if (!existing) {
+        map.set(userId, {
+          userId,
+          name: s.user?.name || "Unknown",
+          employeeCode: s.user?.employeeCode ?? null,
+          totalHours: diffHours,
+          shiftCount: 1,
+        });
+      } else {
+        existing.totalHours += diffHours;
+        existing.shiftCount += 1;
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) =>
+      a.name.localeCompare(b.name)
+    );
+  }, [filteredShifts]);
+
+  const grandTotalHours = useMemo(
+    () => summaries.reduce((sum, s) => sum + s.totalHours, 0),
+    [summaries]
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">Payroll / Shift Summary</h1>
           <p className="text-sm text-gray-600">
-            Summarize hours by employee for a date range and export to CSV.
+            Hours per employee over a selected date range.
           </p>
         </div>
-      </div>
-
-      {/* Filters */}
-      <form
-        onSubmit={loadShifts}
-        className="bg-white border rounded p-4 flex flex-col md:flex-row gap-4 items-start md:items-end"
-      >
-        <div>
-          <label className="block text-xs font-semibold mb-1">From</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 text-sm"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            required
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold mb-1">To</label>
-          <input
-            type="date"
-            className="border rounded px-2 py-1 text-sm"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            required
-          />
-        </div>
         <button
-          type="submit"
+          onClick={() => void loadShifts()}
           disabled={loading}
-          className="px-4 py-2 rounded bg-black text-white text-sm font-semibold disabled:opacity-60"
+          className="inline-flex items-center rounded border border-gray-300 bg-white px-3 py-1 text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
         >
-          {loading ? "Loading..." : "Refresh"}
+          {loading ? "Refreshing..." : "Refresh"}
         </button>
-        <button
-          type="button"
-          onClick={handleExport}
-          className="px-4 py-2 rounded border border-gray-300 text-sm font-semibold hover:bg-gray-50"
-        >
-          Export CSV
-        </button>
-      </form>
+      </header>
 
       {error && (
-        <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {/* Summary header bar */}
-      <div className="bg-white border rounded px-4 py-2 text-sm flex flex-wrap gap-4 justify-between">
-        <div>
-          <span className="font-semibold">Employees in range:</span>{" "}
-          {summaries.length}
+      {/* Filters + summary card */}
+      <section className="rounded border bg-white p-4 shadow-sm space-y-4">
+        <div className="flex flex-wrap gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">
+              From date
+            </label>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 text-sm"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-1">
+              To date
+            </label>
+            <input
+              type="date"
+              className="border rounded px-2 py-1 text-sm"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </div>
         </div>
-        <div>
-          <span className="font-semibold">Total hours in range:</span>{" "}
-          {totalHours.toFixed(2)}
-        </div>
-      </div>
 
-      {/* Summary table */}
-      <div className="bg-white border rounded overflow-x-auto">
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Employee
-              </th>
-              <th className="px-3 py-2 text-left font-semibold text-gray-700">
-                Code
-              </th>
-              <th className="px-3 py-2 text-right font-semibold text-gray-700">
-                Hours
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td
-                  colSpan={3}
-                  className="px-3 py-4 text-center text-gray-400"
-                >
-                  Loading…
-                </td>
-              </tr>
-            ) : summaries.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={3}
-                  className="px-3 py-4 text-center text-gray-400"
-                >
-                  No shifts found for this date range.
-                </td>
-              </tr>
-            ) : (
-              summaries.map((s) => (
-                <tr key={s.userId} className="border-b last:border-b-0">
-                  <td className="px-3 py-2">{s.name}</td>
-                  <td className="px-3 py-2">
-                    {s.employeeCode || (
-                      <span className="text-gray-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-xs">
-                    {s.hours.toFixed(2)}
-                  </td>
+        <div className="mt-2 rounded border bg-gray-50 p-3">
+          <div className="text-xs font-semibold uppercase text-gray-600">
+            Total Hours in Range
+          </div>
+          <div className="mt-1 text-2xl font-bold">
+            {grandTotalHours.toFixed(2)}
+          </div>
+          <div className="mt-1 text-xs text-gray-500">
+            Based on completed shifts with clock-in inside the selected range.
+          </div>
+        </div>
+      </section>
+
+      {/* Employee summaries */}
+      <section className="rounded border bg-white p-4 shadow-sm">
+        <h2 className="mb-3 text-lg font-semibold">Hours by Employee</h2>
+
+        {summaries.length === 0 ? (
+          <div className="text-sm text-gray-500">
+            No completed shifts in this range.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50 text-left text-xs font-semibold text-gray-700">
+                  <th className="px-2 py-1">Employee</th>
+                  <th className="px-2 py-1">Shifts</th>
+                  <th className="px-2 py-1">Total Hours</th>
+                  <th className="px-2 py-1">Avg Hours / Shift</th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {summaries.map((s) => {
+                  const avg =
+                    s.shiftCount > 0
+                      ? s.totalHours / s.shiftCount
+                      : 0;
+                  return (
+                    <tr key={s.userId} className="border-b last:border-0">
+                      <td className="px-2 py-1 text-sm">
+                        {s.name}
+                        {s.employeeCode && (
+                          <span className="ml-1 text-xs text-gray-500">
+                            ({s.employeeCode})
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-2 py-1 text-xs">{s.shiftCount}</td>
+                      <td className="px-2 py-1 text-xs">
+                        {s.totalHours.toFixed(2)}
+                      </td>
+                      <td className="px-2 py-1 text-xs">
+                        {avg.toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

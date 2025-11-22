@@ -1,10 +1,8 @@
 // app/api/admin/employees/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
+import { prisma } from "@/lib/prisma";
+import { AnyARecord } from "dns";
 
 function requireAdmin() {
   const cookieStore = cookies();
@@ -12,19 +10,34 @@ function requireAdmin() {
   return !!session;
 }
 
-// GET /api/admin/employees → list all employees (with defaultLocation)
+// GET /api/admin/employees → list all employees
 export async function GET() {
   if (!requireAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const employees = await prisma.user.findMany({
+    const rawEmployees = await prisma.user.findMany({
       orderBy: { name: "asc" },
-      include: {
-        defaultLocation: true,
+      select: {
+        id: true,
+        name: true,
+        employeeCode: true,
+        role: true,
+        active: true,
+        pinHash: true, // real DB field
       },
     });
+
+    const employees = rawEmployees.map((e) => ({
+      id: e.id,
+      name: e.name,
+      employeeCode: e.employeeCode,
+      role: e.role,
+      active: e.active,
+      // expose as `pin` to the UI
+      pin: e.pinHash ?? null,
+    }));
 
     return NextResponse.json(employees);
   } catch (err) {
@@ -36,7 +49,7 @@ export async function GET() {
   }
 }
 
-// POST /api/admin/employees → create an employee (with optional PIN)
+// POST /api/admin/employees → create new employee
 export async function POST(req: NextRequest) {
   if (!requireAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -52,119 +65,81 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const {
-      name,
-      employeeCode,
-      role,
-      email,
-      defaultLocationId,
-      active,
-      pin,
-    } = body;
+    const { name, employeeCode, role, pin } = body as {
+      name?: string;
+      employeeCode?: string;
+      role?: string;
+      pin?: string;
+    };
 
-    if (!name || !employeeCode || !role) {
+    if (!name || !employeeCode) {
       return NextResponse.json(
-        { error: "name, employeeCode, and role are required" },
+        { error: "name and employeeCode are required" },
         { status: 400 }
       );
     }
 
-    const created = await prisma.user.create({
-      data: {
-        name,
-        employeeCode,
-        role, // "EMPLOYEE" or "ADMIN"
-        email: email || null,
-        active: typeof active === "boolean" ? active : true,
-        defaultLocationId: defaultLocationId || null,
-        // For now we treat pinHash as the plain PIN string
-        pinHash: pin && typeof pin === "string" && pin.length > 0 ? pin : null,
-      },
-      include: {
-        defaultLocation: true,
-      },
-    });
+    // Only two roles supported from the UI right now.
+    // Anything that's not "ADMIN" will be treated as "WORKER".
+    const normalizedRole = role === "ADMIN" ? "ADMIN" : "WORKER";
 
-    return NextResponse.json(created, { status: 201 });
+    let pinToStore: string | null = null;
+    if (typeof pin === "string" && pin.trim().length > 0) {
+      pinToStore = pin.trim();
+    }
+
+    let created;
+    try {
+      created = await prisma.user.create({
+        data: {
+          name,
+          employeeCode,
+          role: normalizedRole as any, // "ADMIN" or "WORKER"
+          active: true,
+          pinHash: pinToStore, // store in pinHash
+        },
+        select: {
+          id: true,
+          name: true,
+          employeeCode: true,
+          role: true,
+          active: true,
+          pinHash: true,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === "P2002") {
+        // unique constraint (very likely on employeeCode)
+        return NextResponse.json(
+          {
+            error:
+              "An employee with that code already exists. Use a unique employee code.",
+          },
+          { status: 400 }
+        );
+      }
+
+      console.error("Prisma error creating employee:", err);
+      return NextResponse.json(
+        { error: "Database error creating employee" },
+        { status: 500 }
+      );
+    }
+
+    const result = {
+      id: created.id,
+      name: created.name,
+      employeeCode: created.employeeCode,
+      role: created.role,
+      active: created.active,
+      pin: created.pinHash ?? null,
+    };
+
+    return NextResponse.json(result, { status: 201 });
   } catch (err) {
     console.error("Error creating employee:", err);
     return NextResponse.json(
       { error: "Failed to create employee" },
-      { status: 500 }
-    );
-  }
-}
-
-// PUT /api/admin/employees → update employee (name, code, role, active, defaultLocationId, PIN)
-export async function PUT(req: NextRequest) {
-  if (!requireAdmin()) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  try {
-    const body = await req.json().catch(() => null);
-
-    if (!body) {
-      return NextResponse.json(
-        { error: "Invalid JSON body" },
-        { status: 400 }
-      );
-    }
-
-    const {
-      id,
-      name,
-      employeeCode,
-      role,
-      email,
-      active,
-      defaultLocationId,
-      pin,
-    } = body;
-
-    if (!id) {
-      return NextResponse.json(
-        { error: "id is required to update employee" },
-        { status: 400 }
-      );
-    }
-
-    const data: any = {};
-
-    if (typeof name === "string") data.name = name;
-    if (typeof employeeCode === "string") data.employeeCode = employeeCode;
-    if (typeof role === "string") data.role = role;
-    if (typeof email === "string") data.email = email;
-    if (typeof active === "boolean") data.active = active;
-    if (typeof defaultLocationId === "string" || defaultLocationId === null) {
-      data.defaultLocationId = defaultLocationId || null;
-    }
-
-    // PIN handling:
-    // - if pin is undefined → don't touch existing pinHash
-    // - if pin is "" → clear pinHash
-    // - if pin is non-empty string → set new PIN
-    if (pin !== undefined) {
-      if (typeof pin === "string" && pin.length > 0) {
-        data.pinHash = pin;
-      } else {
-        data.pinHash = null;
-      }
-    }
-
-    const updated = await prisma.user.update({
-      where: { id },
-      data,
-      include: {
-        defaultLocation: true,
-      },
-    });
-
-    return NextResponse.json(updated);
-  } catch (err) {
-    console.error("Error updating employee:", err);
-    return NextResponse.json(
-      { error: "Failed to update employee" },
       { status: 500 }
     );
   }

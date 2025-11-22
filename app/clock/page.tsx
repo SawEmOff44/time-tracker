@@ -1,36 +1,55 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
 import { useState } from "react";
 import Image from "next/image";
 
 type ApiResponse = {
-  status?: "clocked_in" | "clocked_out" | string;
+  status?: string; // "clocked_in" | "clocked_out" | etc.
   message?: string;
-  shift?: any;
+  shift?: {
+    id: string;
+    clockIn: string;
+    clockOut: string | null;
+    location?: {
+      id: string;
+      name: string;
+      code: string;
+    } | null;
+  };
   error?: string;
-  [key: string]: any; // allow extra fields from API
 };
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
   const [loading, setLoading] = useState(false);
-  const [response, setResponse] = useState<ApiResponse | null>(null);
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const [currentStatus, setCurrentStatus] = useState<
+    "idle" | "clocked_in" | "clocked_out"
+  >("idle");
+  const [currentLocationName, setCurrentLocationName] = useState<string | null>(
+    null
+  );
+  const [currentClockIn, setCurrentClockIn] = useState<string | null>(null);
+  const [currentClockOut, setCurrentClockOut] = useState<string | null>(null);
+
+  function formatDateTime(dt: string | null): string {
+    if (!dt) return "";
+    const d = new Date(dt);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString();
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setResponse(null);
     setGpsStatus(null);
+    setErrorMessage(null);
 
     if (!navigator.geolocation) {
-      setResponse({
-        status: "clocked_out",
-        error: "Location not supported on this device.",
-      });
+      setErrorMessage("Location not supported on this device.");
       setLoading(false);
       return;
     }
@@ -59,20 +78,43 @@ export default function ClockPage() {
           const data = (await res.json()) as ApiResponse;
 
           if (!res.ok) {
-            setResponse({
-              status: data.status ?? "clocked_out",
-              error: data.error || "Unknown error",
-              ...data,
-            });
+            setErrorMessage(data.error || "Unknown error");
+            setCurrentStatus("idle");
+            setCurrentClockIn(null);
+            setCurrentClockOut(null);
+            setCurrentLocationName(null);
+            return;
+          }
+
+          // Successful clock in/out
+          const status = data.status === "clocked_in"
+            ? "clocked_in"
+            : data.status === "clocked_out"
+            ? "clocked_out"
+            : "idle";
+
+          setCurrentStatus(status);
+
+          if (data.shift) {
+            setCurrentClockIn(
+              data.shift.clockIn ? data.shift.clockIn : null
+            );
+            setCurrentClockOut(
+              data.shift.clockOut ? data.shift.clockOut : null
+            );
+            setCurrentLocationName(data.shift.location?.name ?? null);
           } else {
-            setResponse(data);
+            setCurrentClockIn(null);
+            setCurrentClockOut(null);
+            setCurrentLocationName(null);
           }
         } catch (err) {
-          console.error(err);
-          setResponse({
-            status: "clocked_out",
-            error: "Network error contacting the server.",
-          });
+          console.error("Clock API error:", err);
+          setErrorMessage("Network error contacting the server.");
+          setCurrentStatus("idle");
+          setCurrentClockIn(null);
+          setCurrentClockOut(null);
+          setCurrentLocationName(null);
         } finally {
           setLoading(false);
         }
@@ -80,28 +122,16 @@ export default function ClockPage() {
       (geoErr) => {
         if (geoErr.code === geoErr.PERMISSION_DENIED) {
           setGpsStatus("Location permission denied.");
-          setResponse({
-            status: "clocked_out",
-            error: "We need location permission to clock you in/out.",
-          });
+          setErrorMessage("We need location permission to clock you in/out.");
         } else if (geoErr.code === geoErr.POSITION_UNAVAILABLE) {
           setGpsStatus("Location unavailable.");
-          setResponse({
-            status: "clocked_out",
-            error: "Could not determine your location.",
-          });
+          setErrorMessage("Could not determine your location.");
         } else if (geoErr.code === geoErr.TIMEOUT) {
           setGpsStatus("Location request timed out.");
-          setResponse({
-            status: "clocked_out",
-            error: "Location request timed out. Try again.",
-          });
+          setErrorMessage("Location request timed out. Try again.");
         } else {
           setGpsStatus("Unknown GPS error.");
-          setResponse({
-            status: "clocked_out",
-            error: "Unknown GPS error occurred.",
-          });
+          setErrorMessage("Unknown GPS error occurred.");
         }
 
         setLoading(false);
@@ -114,10 +144,12 @@ export default function ClockPage() {
     );
   }
 
+  const isClockedIn = currentStatus === "clocked_in";
+
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50">
+    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4">
-        {/* Logo centered */}
+        {/* Logo */}
         <div className="w-full flex justify-center mb-2">
           <Image
             src="/rhinehart-logo.jpeg"
@@ -131,16 +163,86 @@ export default function ClockPage() {
 
         <h1 className="text-2xl font-bold text-center">Clock In / Out</h1>
         <p className="text-sm text-gray-600 text-center">
-          GPS is required. Your job site is auto-detected from your location.
+          GPS is required for clocking in/out.
         </p>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+        {/* Current status panel */}
+        <div
+          className={
+            "rounded-md border px-3 py-2 text-sm " +
+            (isClockedIn
+              ? "border-green-300 bg-green-50 text-green-800"
+              : "border-gray-200 bg-gray-50 text-gray-800")
+          }
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-semibold">
+              Status:{" "}
+              {currentStatus === "clocked_in"
+                ? "Clocked In"
+                : currentStatus === "clocked_out"
+                ? "Clocked Out"
+                : "Not clocked in"}
+            </span>
+            {isClockedIn && (
+              <span className="inline-block px-2 py-0.5 rounded-full bg-green-600 text-white text-[11px] font-semibold">
+                ACTIVE
+              </span>
+            )}
+          </div>
+
+          {currentLocationName && (
+            <div className="text-xs text-gray-700">
+              Location: <span className="font-medium">{currentLocationName}</span>
+            </div>
+          )}
+
+          {currentClockIn && (
+            <div className="text-xs text-gray-700 mt-1">
+              Clock in:{" "}
+              <span className="font-mono">
+                {formatDateTime(currentClockIn)}
+              </span>
+            </div>
+          )}
+
+          {currentClockOut && (
+            <div className="text-xs text-gray-700">
+              Clock out:{" "}
+              <span className="font-mono">
+                {formatDateTime(currentClockOut)}
+              </span>
+            </div>
+          )}
+
+          {!currentClockIn && currentStatus === "idle" && (
+            <div className="text-xs text-gray-500 mt-1">
+              Once you clock in, you&apos;ll see your times here.
+            </div>
+          )}
+        </div>
+
+        {/* Error + GPS messages */}
+        {errorMessage && (
+          <div className="border border-red-300 bg-red-50 text-red-800 px-3 py-2 rounded text-xs">
+            {errorMessage}
+          </div>
+        )}
+
+        {gpsStatus && (
+          <div className="text-xs text-gray-700">
+            <strong>GPS:</strong> {gpsStatus}
+          </div>
+        )}
+
+        {/* Clock form */}
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">
               Employee Code
             </label>
             <input
-              className="border rounded px-2 py-1 w-full"
+              className="border rounded px-2 py-1 w-full text-sm"
               placeholder="e.g. ALI001"
               value={employeeCode}
               onChange={(e) => setEmployeeCode(e.target.value)}
@@ -152,7 +254,7 @@ export default function ClockPage() {
             <label className="block text-sm font-medium mb-1">PIN</label>
             <input
               type="password"
-              className="border rounded px-2 py-1 w-full"
+              className="border rounded px-2 py-1 w-full text-sm"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
               required
@@ -162,72 +264,11 @@ export default function ClockPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
+            className="w-full py-2 rounded bg-black text-white font-semibold text-sm disabled:opacity-60"
           >
             {loading ? "Checking location..." : "Clock In / Out"}
           </button>
         </form>
-
-        {/* GPS Status */}
-        {gpsStatus && (
-          <div className="text-xs text-gray-700 mt-2">
-            <strong>GPS:</strong> {gpsStatus}
-          </div>
-        )}
-
-        {/* Simple summary */}
-        {response && (
-          <div className="mt-3 text-sm">
-            {response.error ? (
-              <div className="text-red-600 font-medium">
-                Error: {response.error}
-              </div>
-            ) : (
-              <>
-                {response.status && (
-                  <div className="font-semibold">
-                    Status:{" "}
-                    {response.status === "clocked_in"
-                      ? "Clocked IN"
-                      : response.status === "clocked_out"
-                      ? "Clocked OUT"
-                      : response.status}
-                  </div>
-                )}
-                {response.shift && (
-                  <div className="mt-1 text-xs text-gray-700">
-                    <div>
-                      Clock In:{" "}
-                      {response.shift.clockIn
-                        ? new Date(response.shift.clockIn).toLocaleString()
-                        : "—"}
-                    </div>
-                    <div>
-                      Clock Out:{" "}
-                      {response.shift.clockOut
-                        ? new Date(response.shift.clockOut).toLocaleString()
-                        : "—"}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Raw API Response for debugging */}
-        <div className="mt-4">
-          <h2 className="text-sm font-semibold mb-1">API Response</h2>
-          <div className="border rounded px-2 py-2 text-xs bg-gray-50 min-h-[60px] whitespace-pre-wrap">
-            {response ? (
-              <code>{JSON.stringify(response, null, 2)}</code>
-            ) : (
-              <span className="text-gray-400">
-                Submit the form to see the response.
-              </span>
-            )}
-          </div>
-        </div>
       </div>
     </main>
   );

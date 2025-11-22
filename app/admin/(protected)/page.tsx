@@ -1,377 +1,263 @@
-"use client";
+// app/admin/(protected)/page.tsx
+import { prisma } from "@/lib/prisma";
 
-import { useEffect, useMemo, useState } from "react";
-
-type Role = "EMPLOYEE" | "ADMIN";
-
-type User = {
-  id: string;
-  name: string;
-  employeeCode: string | null;
-  role: Role;
-};
-
-type Location = {
-  id: string;
-  name: string;
-  code: string | null;
-};
-
-type Shift = {
-  id: string;
-  userId: string;
-  locationId: string | null;
-  clockIn: string; // ISO from API
-  clockOut: string | null;
-  clockInLat: number | null;
-  clockInLng: number | null;
-  clockOutLat: number | null;
-  clockOutLng: number | null;
-  user: User | null;
-  location: Location | null;
-};
-
-type AdhocAgg = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
-  count: number;
-  lastAdhoc: Date | null;
-};
-
-export default function AdminDashboardPage() {
-  const [shifts, setShifts] = useState<Shift[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function loadShifts() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/shifts");
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to load shifts");
-      }
-      const json = (await res.json()) as Shift[];
-      setShifts(json);
-    } catch (err: any) {
-      console.error("Error loading shifts:", err);
-      setError(err.message || "Failed to load shifts");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadShifts();
-  }, []);
-
-  // Time windows (computed fresh each render; good enough for a dashboard)
+function getStartOfToday() {
   const now = new Date();
-  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-  const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+}
 
-  // --- Derived stats ---
-
-  // Open shifts (no clockOut)
-  const openShiftsCount = useMemo(
-    () => shifts.filter((s) => !s.clockOut).length,
-    [shifts]
+function getStartOfDaysAgo(days: number) {
+  const now = new Date();
+  const d = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - days,
+    0,
+    0,
+    0,
+    0
   );
+  return d;
+}
 
-  // Total hours in last 7 days
-  const totalHoursLast7Days = useMemo(() => {
-    let totalMs = 0;
-    for (const s of shifts) {
-      if (!s.clockOut) continue;
+export default async function AdminDashboardPage() {
+  // Basic stats
+  const [employeeCount, locationCount] = await Promise.all([
+    prisma.user.count({
+      where: { active: true },
+    }),
+    prisma.location.count({
+      where: { active: true },
+    }),
+  ]);
 
-      const ci = new Date(s.clockIn);
-      const co = new Date(s.clockOut);
+  const startOfToday = getStartOfToday();
 
-      if (ci >= sevenDaysAgo && ci <= now && co > ci) {
-        totalMs += co.getTime() - ci.getTime();
-      }
-    }
-    const hours = totalMs / (1000 * 60 * 60);
-    return hours;
-  }, [shifts, sevenDaysAgo, now]);
+  // Today's shifts for total hours + recent
+  const todayShifts = await prisma.shift.findMany({
+    where: {
+      clockIn: {
+        gte: startOfToday,
+      },
+    },
+    orderBy: { clockIn: "desc" },
+    include: {
+      user: {
+        select: { id: true, name: true, employeeCode: true },
+      },
+      location: {
+        select: { id: true, name: true, code: true },
+      },
+    },
+  });
 
-  // ADHOC stats (last 14 days)
-  const adhocAggList: AdhocAgg[] = useMemo(() => {
-    const map = new Map<string, AdhocAgg>();
+  const totalHoursToday = todayShifts.reduce((sum, s) => {
+    const start = s.clockIn;
+    const end = s.clockOut ?? new Date();
+    const diffMs = end.getTime() - start.getTime();
+    const hours = diffMs / (1000 * 60 * 60);
+    return sum + (hours > 0 ? hours : 0);
+  }, 0);
 
-    for (const s of shifts) {
-      if (!s.location || s.location.code !== "ADHOC") continue;
+  const recentShifts = await prisma.shift.findMany({
+    take: 10,
+    orderBy: { clockIn: "desc" },
+    include: {
+      user: {
+        select: { id: true, name: true, employeeCode: true },
+      },
+      location: {
+        select: { id: true, name: true, code: true },
+      },
+    },
+  });
 
-      const ci = new Date(s.clockIn);
-      if (ci < fourteenDaysAgo || ci > now) continue;
+  // ADHOC review (last 14 days)
+  const adhocLocation = await prisma.location.findFirst({
+    where: { code: "ADHOC" },
+  });
 
-      const userId = s.userId;
-      const existing = map.get(userId);
-      if (!existing) {
-        map.set(userId, {
-          userId,
-          name: s.user?.name || "Unknown",
+  let adhocTotal = 0;
+  let adhocByUser: {
+    userId: string | null;
+    name: string | null;
+    employeeCode: string | null;
+    count: number;
+  }[] = [];
+
+  if (adhocLocation) {
+    const fourteenDaysAgo = getStartOfDaysAgo(14);
+
+    const adhocShifts = await prisma.shift.findMany({
+      where: {
+        locationId: adhocLocation.id,
+        clockIn: {
+          gte: fourteenDaysAgo,
+        },
+      },
+      include: {
+        user: {
+          select: { id: true, name: true, employeeCode: true },
+        },
+      },
+    });
+
+    adhocTotal = adhocShifts.length;
+
+    const map = new Map<
+      string | null,
+      { userId: string | null; name: string | null; employeeCode: string | null; count: number }
+    >();
+
+    for (const s of adhocShifts) {
+      const key = s.user?.id ?? null;
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(key, {
+          userId: s.user?.id ?? null,
+          name: s.user?.name ?? null,
           employeeCode: s.user?.employeeCode ?? null,
           count: 1,
-          lastAdhoc: ci,
         });
-      } else {
-        existing.count += 1;
-        if (!existing.lastAdhoc || ci > existing.lastAdhoc) {
-          existing.lastAdhoc = ci;
-        }
       }
     }
 
-    return Array.from(map.values()).sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      const ad = a.lastAdhoc ? a.lastAdhoc.getTime() : 0;
-      const bd = b.lastAdhoc ? b.lastAdhoc.getTime() : 0;
-      return bd - ad;
-    });
-  }, [shifts, fourteenDaysAgo, now]);
-
-  const totalAdhocShiftsLast14 = useMemo(
-    () => adhocAggList.reduce((sum, a) => sum + a.count, 0),
-    [adhocAggList]
-  );
-
-  const topAdhocList = useMemo(() => adhocAggList.slice(0, 5), [adhocAggList]);
-
-  // Recent shifts (last 10 by clock-in time)
-  const recentShifts = useMemo(() => {
-    return [...shifts]
-      .sort((a, b) => {
-        const da = new Date(a.clockIn).getTime();
-        const db = new Date(b.clockIn).getTime();
-        return db - da;
-      })
-      .slice(0, 10);
-  }, [shifts]);
+    adhocByUser = Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <main className="p-6 space-y-6 max-w-6xl mx-auto">
+      <header className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Admin Dashboard</h1>
+          <h1 className="text-2xl font-semibold">Admin Dashboard</h1>
           <p className="text-sm text-gray-600">
-            Live view of shifts, hours, and ADHOC usage.
+            Overview of today&apos;s activity and ADHOC clock-ins.
           </p>
         </div>
-        <button
-          onClick={() => void loadShifts()}
-          disabled={loading}
-          className="inline-flex items-center rounded border border-gray-300 bg-white px-3 py-1 text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
       </header>
 
-      {/* Errors */}
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+      {/* Top stats row */}
+      <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="text-xs text-gray-500">Active Employees</div>
+          <div className="text-2xl font-semibold mt-1">{employeeCount}</div>
         </div>
-      )}
-
-      {/* Key Stats row */}
-      <section className="grid gap-4 md:grid-cols-3">
-        {/* Open shifts */}
-        <div className="rounded border bg-white p-4 shadow-sm">
-          <div className="text-xs font-semibold uppercase text-gray-500">
-            Open Shifts
-          </div>
-          <div className="mt-2 text-3xl font-bold">{openShiftsCount}</div>
-          <p className="mt-1 text-xs text-gray-500">
-            Shifts currently in progress (no clock out yet).
-          </p>
+        <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="text-xs text-gray-500">Active Locations</div>
+          <div className="text-2xl font-semibold mt-1">{locationCount}</div>
         </div>
-
-        {/* Hours last 7 days */}
-        <div className="rounded border bg-white p-4 shadow-sm">
-          <div className="text-xs font-semibold uppercase text-gray-500">
-            Hours (Last 7 Days)
+        <div className="bg-white rounded-lg shadow-sm p-4">
+          <div className="text-xs text-gray-500">Total Hours Today</div>
+          <div className="text-2xl font-semibold mt-1">
+            {totalHoursToday.toFixed(2)}
           </div>
-          <div className="mt-2 text-3xl font-bold">
-            {totalHoursLast7Days.toFixed(1)}
-          </div>
-          <p className="mt-1 text-xs text-gray-500">
-            Sum of completed shifts starting in the last 7 days.
-          </p>
-        </div>
-
-        {/* ADHOC shifts */}
-        <div className="rounded border bg-white p-4 shadow-sm">
-          <div className="text-xs font-semibold uppercase text-gray-500">
-            ADHOC Shifts (Last 14 Days)
-          </div>
-          <div className="mt-2 text-3xl font-bold">
-            {totalAdhocShiftsLast14}
-          </div>
-          <p className="mt-1 text-xs text-gray-500">
-            Total ADHOC clock-ins in the last 14 days across all employees.
-          </p>
         </div>
       </section>
 
-      {/* Top ADHOC Logins */}
-      <section className="rounded border bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">
-            Top ADHOC Logins (Last 14 Days)
+      {/* ADHOC + Recent Shifts */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* ADHOC card */}
+        <div className="bg-white rounded-lg shadow-sm p-4 space-y-2">
+          <h2 className="text-sm font-semibold">
+            ADHOC Clock-ins (Last 14 Days)
           </h2>
-          <span className="text-xs text-gray-500">
-            Employees with frequent off-site or unassigned clock-ins.
-          </span>
+          {adhocLocation ? (
+            <>
+              <div className="text-xs text-gray-600">
+                Total ADHOC shifts:{" "}
+                <span className="font-semibold">{adhocTotal}</span>
+              </div>
+              {adhocByUser.length === 0 ? (
+                <div className="text-sm text-gray-600 mt-2">
+                  No ADHOC shifts in the last 14 days.
+                </div>
+              ) : (
+                <div className="mt-2">
+                  <table className="min-w-full text-xs">
+                    <thead>
+                      <tr className="border-b text-[11px] text-gray-600">
+                        <th className="text-left py-1 pr-2">Employee</th>
+                        <th className="text-right py-1 pl-2">ADHOC Count</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adhocByUser.map((u) => (
+                        <tr key={u.userId ?? "unknown"} className="border-b last:border-0">
+                          <td className="py-1 pr-2">
+                            {u.name || "(unknown)"}{" "}
+                            {u.employeeCode ? `(${u.employeeCode})` : ""}
+                          </td>
+                          <td className="py-1 pl-2 text-right font-semibold">
+                            {u.count}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-gray-500 mt-2">
+                    Employees with frequent ADHOC clock-ins may warrant a quick
+                    review in the Shifts view.
+                  </p>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-sm text-gray-600">
+              No ADHOC location configured yet. Create a location with code{" "}
+              <code className="bg-gray-100 px-1 py-0.5 rounded text-[11px]">
+                ADHOC
+              </code>{" "}
+              to track out-of-bounds clock-ins.
+            </div>
+          )}
         </div>
 
-        {topAdhocList.length === 0 ? (
-          <div className="text-sm text-gray-500">
-            No ADHOC shifts recorded in the last 14 days.
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs font-semibold text-gray-700">
-                  <th className="px-2 py-1">Employee</th>
-                  <th className="px-2 py-1">ADHOC Shifts</th>
-                  <th className="px-2 py-1">Last ADHOC</th>
-                  <th className="px-2 py-1">Flag</th>
-                </tr>
-              </thead>
-              <tbody>
-                {topAdhocList.map((row) => {
-                  const { userId, name, employeeCode, count, lastAdhoc } = row;
-                  const flagHigh = count >= 3;
+        {/* Recent shifts */}
+        <div className="bg-white rounded-lg shadow-sm p-4 space-y-2">
+          <h2 className="text-sm font-semibold">Recent Shifts</h2>
+          {recentShifts.length === 0 ? (
+            <div className="text-sm text-gray-600">No recent shifts.</div>
+          ) : (
+            <ul className="divide-y text-sm">
+              {recentShifts.map((s) => {
+                const isAdhoc = s.location?.code === "ADHOC";
+                const clockIn = s.clockIn.toLocaleString();
+                const clockOut = s.clockOut
+                  ? s.clockOut.toLocaleString()
+                  : "—";
 
-                  return (
-                    <tr
-                      key={userId}
-                      className={`border-b last:border-0 ${
-                        flagHigh ? "bg-red-50 text-red-800" : ""
-                      }`}
-                    >
-                      <td className="px-2 py-1 text-sm">
-                        {name}
-                        {employeeCode && (
-                          <span className="ml-1 text-xs text-gray-500">
-                            ({employeeCode})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1 text-sm font-semibold">
-                        {count}
-                      </td>
-                      <td className="px-2 py-1 text-xs">
-                        {lastAdhoc ? lastAdhoc.toLocaleString() : "Unknown"}
-                      </td>
-                      <td className="px-2 py-1 text-xs">
-                        {flagHigh ? (
-                          <span className="rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800">
-                            HIGH ADHOC
-                          </span>
-                        ) : (
-                          <span className="rounded bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800">
-                            ADHOC WATCH
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Recent Shifts (with View in Map) */}
-      <section className="rounded border bg-white p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Recent Shifts</h2>
-          <span className="text-xs text-gray-500">
-            Last 10 shifts by clock-in time.
-          </span>
+                return (
+                  <li key={s.id} className="py-2 flex items-start justify-between">
+                    <div>
+                      <div className="font-medium">
+                        {s.user?.name || "(unknown)"}{" "}
+                        {s.user?.employeeCode
+                          ? `(${s.user.employeeCode})`
+                          : ""}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {s.location
+                          ? `${s.location.name} (${s.location.code})`
+                          : "Unknown location"}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        In: {clockIn} | Out: {clockOut}
+                      </div>
+                    </div>
+                    {isAdhoc && (
+                      <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-semibold">
+                        ADHOC
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
-
-        {recentShifts.length === 0 ? (
-          <div className="text-sm text-gray-500">No shifts found.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs font-semibold text-gray-700">
-                  <th className="px-2 py-1">Employee</th>
-                  <th className="px-2 py-1">Location</th>
-                  <th className="px-2 py-1">Clock In</th>
-                  <th className="px-2 py-1">Clock Out</th>
-                  <th className="px-2 py-1">Hours</th>
-                  <th className="px-2 py-1">Map</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentShifts.map((s) => {
-                  const ci = new Date(s.clockIn);
-                  const co = s.clockOut ? new Date(s.clockOut) : null;
-                  let hours: string | null = null;
-                  if (co && co > ci) {
-                    const diffMs = co.getTime() - ci.getTime();
-                    hours = (diffMs / (1000 * 60 * 60)).toFixed(2);
-                  }
-
-                  const isAdhoc = s.location?.code === "ADHOC";
-
-                  return (
-                    <tr
-                      key={s.id}
-                      className={`border-b last:border-0 ${
-                        isAdhoc ? "bg-yellow-50" : ""
-                      }`}
-                    >
-                      <td className="px-2 py-1 text-sm">
-                        {s.user?.name || "Unknown"}
-                        {s.user?.employeeCode && (
-                          <span className="ml-1 text-xs text-gray-500">
-                            ({s.user.employeeCode})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1 text-sm">
-                        {s.location?.name || "Unknown"}
-                      </td>
-                      <td className="px-2 py-1 text-xs">
-                        {ci.toLocaleString()}
-                      </td>
-                      <td className="px-2 py-1 text-xs">
-                        {co ? co.toLocaleString() : "—"}
-                      </td>
-                      <td className="px-2 py-1 text-xs">{hours ?? "—"}</td>
-                      <td className="px-2 py-1 text-xs">
-                        {s.clockInLat != null && s.clockInLng != null ? (
-                          <a
-                            href={`https://www.google.com/maps?q=${s.clockInLat},${s.clockInLng}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline"
-                          >
-                            View in Map
-                          </a>
-                        ) : (
-                          <span className="text-gray-400">No GPS</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
       </section>
-    </div>
+    </main>
   );
 }

@@ -2,338 +2,643 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Role = "EMPLOYEE" | "ADMIN";
-
-type User = {
+type Employee = {
   id: string;
-  name: string;
+  name: string | null;
   employeeCode: string | null;
-  role: Role;
+  role: string;
+  active: boolean;
 };
 
 type Location = {
   id: string;
   name: string;
-  code: string | null;
+  code: string;
+  active: boolean;
 };
 
 type Shift = {
   id: string;
-  userId: string;
-  locationId: string | null;
-  clockIn: string; // ISO string from API
-  clockOut: string | null; // ISO or null
+  clockIn: string;
+  clockOut: string | null;
   clockInLat: number | null;
   clockInLng: number | null;
   clockOutLat: number | null;
   clockOutLng: number | null;
-  user: User | null;
-  location: Location | null;
+  user: {
+    id: string;
+    name: string | null;
+    employeeCode: string | null;
+  } | null;
+  location: {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
 };
 
-export default function ShiftsPage() {
+function formatDateTime(dt: string | null | undefined) {
+  if (!dt) return "";
+  const d = new Date(dt);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString();
+}
+
+function toInputDateTime(dt: string | null): { date: string; time: string } {
+  if (!dt) return { date: "", time: "" };
+  const d = new Date(dt);
+  if (isNaN(d.getTime())) return { date: "", time: "" };
+
+  const iso = d.toISOString(); // "2025-11-22T20:15:30.000Z"
+  const [date, fullTime] = iso.split("T");
+  const time = fullTime.slice(0, 5); // "HH:MM"
+  return { date, time };
+}
+
+function combineDateTime(date: string, time: string): string | null {
+  if (!date || !time) return null;
+  // Let the browser interpret local time
+  return `${date}T${time}:00`;
+}
+
+function hoursBetween(clockIn: string, clockOut: string | null): number {
+  const start = new Date(clockIn);
+  const end = clockOut ? new Date(clockOut) : new Date();
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  const diffMs = end.getTime() - start.getTime();
+  return diffMs / (1000 * 60 * 60);
+}
+
+export default function AdminShiftsPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Filters (purely client-side)
-  const [startDate, setStartDate] = useState<string>("");
-  const [endDate, setEndDate] = useState<string>("");
-  const [employeeFilter, setEmployeeFilter] = useState<string>("");
-  const [locationFilter, setLocationFilter] = useState<string>("");
+  // Filters
+  const [filterEmployeeId, setFilterEmployeeId] = useState<string>("");
+  const [filterLocationId, setFilterLocationId] = useState<string>("");
+  const [filterFrom, setFilterFrom] = useState<string>("");
+  const [filterTo, setFilterTo] = useState<string>("");
+  const [adhocOnly, setAdhocOnly] = useState<boolean>(false);
 
-  // Derived lists for filters
-  const employees = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; employeeCode: string | null }>();
-    for (const s of shifts) {
-      if (s.user) {
-        map.set(s.user.id, {
-          id: s.user.id,
-          name: s.user.name,
-          employeeCode: s.user.employeeCode,
-        });
+  // Manual create / edit
+  const [formEmployeeId, setFormEmployeeId] = useState<string>("");
+  const [formLocationId, setFormLocationId] = useState<string>("");
+  const [formClockInDate, setFormClockInDate] = useState<string>("");
+  const [formClockInTime, setFormClockInTime] = useState<string>("");
+  const [formClockOutDate, setFormClockOutDate] = useState<string>("");
+  const [formClockOutTime, setFormClockOutTime] = useState<string>("");
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
+
+  // Load base data
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAll() {
+      try {
+        setLoading(true);
+        setError(null);
+
+        const [shiftsRes, employeesRes, locationsRes] = await Promise.all([
+          fetch("/api/shifts"),
+          fetch("/api/admin/employees"),
+          fetch("/api/admin/locations"),
+        ]);
+
+        if (!shiftsRes.ok) throw new Error("Failed to load shifts");
+        if (!employeesRes.ok) throw new Error("Failed to load employees");
+        if (!locationsRes.ok) throw new Error("Failed to load locations");
+
+        const [shiftsJson, employeesJson, locationsJson] = await Promise.all([
+          shiftsRes.json(),
+          employeesRes.json(),
+          locationsRes.json(),
+        ]);
+
+        if (!cancelled) {
+          setShifts(shiftsJson);
+          setEmployees(employeesJson);
+          setLocations(locationsJson);
+        }
+      } catch (err: any) {
+        console.error("Error loading shifts page data:", err);
+        if (!cancelled) {
+          setError(err?.message || "Failed to load data");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     }
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [shifts]);
 
-  const locations = useMemo(() => {
-    const map = new Map<string, { id: string; name: string; code: string | null }>();
-    for (const s of shifts) {
-      if (s.location) {
-        map.set(s.location.id, {
-          id: s.location.id,
-          name: s.location.name,
-          code: s.location.code,
-        });
+    loadAll();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Filtered list
+  const filteredShifts = useMemo(() => {
+    return shifts.filter((s) => {
+      if (filterEmployeeId && s.user?.id !== filterEmployeeId) {
+        return false;
       }
-    }
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [shifts]);
+      if (filterLocationId && s.location?.id !== filterLocationId) {
+        return false;
+      }
 
-  async function loadShifts() {
-    setLoading(true);
-    setError(null);
+      if (adhocOnly) {
+        if (!s.location || s.location.code !== "ADHOC") return false;
+      }
+
+      if (filterFrom) {
+        const fromDate = new Date(filterFrom);
+        const clockIn = new Date(s.clockIn);
+        if (clockIn < fromDate) return false;
+      }
+
+      if (filterTo) {
+        const toDate = new Date(filterTo);
+        const clockIn = new Date(s.clockIn);
+        if (clockIn > toDate) return false;
+      }
+
+      return true;
+    });
+  }, [shifts, filterEmployeeId, filterLocationId, filterFrom, filterTo, adhocOnly]);
+
+  const totalFilteredHours = useMemo(() => {
+    return filteredShifts.reduce((sum, s) => {
+      return sum + hoursBetween(s.clockIn, s.clockOut);
+    }, 0);
+  }, [filteredShifts]);
+
+  function resetForm() {
+    setFormEmployeeId("");
+    setFormLocationId("");
+    setFormClockInDate("");
+    setFormClockInTime("");
+    setFormClockOutDate("");
+    setFormClockOutTime("");
+    setEditingShiftId(null);
+    setSaveError(null);
+  }
+
+  function startEdit(shift: Shift) {
+    setEditingShiftId(shift.id);
+    setFormEmployeeId(shift.user?.id ?? "");
+    setFormLocationId(shift.location?.id ?? "");
+
+    const ci = toInputDateTime(shift.clockIn);
+    const co = toInputDateTime(shift.clockOut);
+
+    setFormClockInDate(ci.date);
+    setFormClockInTime(ci.time);
+    setFormClockOutDate(co.date);
+    setFormClockOutTime(co.time);
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setSaveError(null);
+    setSaving(true);
+
     try {
-      const res = await fetch("/api/shifts");
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to load shifts");
+      if (!formEmployeeId || !formLocationId || !formClockInDate || !formClockInTime) {
+        setSaveError("Employee, location, and clock-in date/time are required.");
+        return;
       }
-      const json = (await res.json()) as Shift[];
-      setShifts(json);
+
+      const clockInIso = combineDateTime(formClockInDate, formClockInTime);
+      if (!clockInIso) {
+        setSaveError("Invalid clock-in date/time.");
+        return;
+      }
+
+      let clockOutIso: string | null = null;
+      if (formClockOutDate && formClockOutTime) {
+        clockOutIso = combineDateTime(formClockOutDate, formClockOutTime);
+        if (!clockOutIso) {
+          setSaveError("Invalid clock-out date/time.");
+          return;
+        }
+      }
+
+      if (editingShiftId) {
+        // Update existing via /api/admin/shifts/:id
+        const res = await fetch(`/api/admin/shifts/${editingShiftId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clockIn: clockInIso,
+            clockOut: clockOutIso,
+            locationId: formLocationId,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to update shift");
+        }
+
+        const updated = (await res.json()) as Shift;
+        setShifts((prev) =>
+          prev.map((s) => (s.id === updated.id ? updated : s))
+        );
+      } else {
+        // Create new via /api/shifts
+        const res = await fetch("/api/shifts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: formEmployeeId,
+            locationId: formLocationId,
+            clockIn: clockInIso,
+            clockOut: clockOutIso,
+          }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to create shift");
+        }
+
+        const created = (await res.json()) as Shift;
+        setShifts((prev) => [created, ...prev]);
+      }
+
+      resetForm();
     } catch (err: any) {
-      console.error("Error loading shifts:", err);
-      setError(err.message || "Failed to load shifts");
+      console.error("Error saving shift:", err);
+      setSaveError(err?.message || "Error saving shift");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  useEffect(() => {
-    void loadShifts();
-  }, []);
+  async function handleDelete(shiftId: string) {
+    if (!window.confirm("Delete this shift? This cannot be undone.")) return;
 
-  // Apply filters on the client
-  const filteredShifts = useMemo(() => {
-    let result = [...shifts];
-
-    // Filter by date range (based on clockIn)
-    if (startDate) {
-      const start = new Date(startDate);
-      result = result.filter((s) => {
-        const ci = new Date(s.clockIn);
-        return ci >= start;
+    try {
+      const res = await fetch(`/api/admin/shifts/${shiftId}`, {
+        method: "DELETE",
       });
-    }
 
-    if (endDate) {
-      const end = new Date(endDate);
-      // add 1 day to include the end date fully
-      end.setHours(23, 59, 59, 999);
-      result = result.filter((s) => {
-        const ci = new Date(s.clockIn);
-        return ci <= end;
-      });
-    }
-
-    // Filter by employee
-    if (employeeFilter) {
-      result = result.filter((s) => s.userId === employeeFilter);
-    }
-
-    // Filter by location (including ADHOC by code)
-    if (locationFilter) {
-      if (locationFilter === "ADHOC") {
-        result = result.filter((s) => s.location?.code === "ADHOC");
-      } else {
-        result = result.filter((s) => s.locationId === locationFilter);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete shift");
       }
+
+      setShifts((prev) => prev.filter((s) => s.id !== shiftId));
+    } catch (err: any) {
+      console.error("Error deleting shift:", err);
+      alert(err?.message || "Error deleting shift");
     }
-
-    // Sort most recent first
-    result.sort((a, b) => {
-      const da = new Date(a.clockIn).getTime();
-      const db = new Date(b.clockIn).getTime();
-      return db - da;
-    });
-
-    return result;
-  }, [shifts, startDate, endDate, employeeFilter, locationFilter]);
-
-  // Count ADHOC shifts per user *in the current filtered set*
-  const adhocCountsByUser: Record<string, number> = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const s of filteredShifts) {
-      if (s.location?.code === "ADHOC" && s.userId) {
-        counts[s.userId] = (counts[s.userId] || 0) + 1;
-      }
-    }
-    return counts;
-  }, [filteredShifts]);
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold">Shifts</h1>
-        <button
-          onClick={() => void loadShifts()}
-          disabled={loading}
-          className="inline-flex items-center rounded border border-gray-300 bg-white px-3 py-1 text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+    <main className="p-6 space-y-6 max-w-6xl mx-auto">
+      <header className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Shifts</h1>
+          <p className="text-sm text-gray-600">
+            View, filter, create, edit, and delete shifts. ADHOC shifts are highlighted.
+          </p>
+        </div>
       </header>
 
-      {/* Errors */}
       {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="border border-red-300 bg-red-50 text-red-800 px-3 py-2 rounded text-sm">
           {error}
         </div>
       )}
 
       {/* Filters */}
-      <section className="rounded border bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Filters</h2>
-        <div className="grid gap-3 md:grid-cols-4">
+      <section className="bg-white rounded-lg shadow-sm p-4 space-y-3">
+        <h2 className="text-sm font-semibold">Filters</h2>
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
-            <label className="block text-sm font-medium mb-1">Start Date</label>
-            <input
-              type="date"
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">End Date</label>
-            <input
-              type="date"
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">Employee</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Employee
+            </label>
             <select
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={employeeFilter}
-              onChange={(e) => setEmployeeFilter(e.target.value)}
+              value={filterEmployeeId}
+              onChange={(e) => setFilterEmployeeId(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
             >
               <option value="">All</option>
               {employees.map((emp) => (
                 <option key={emp.id} value={emp.id}>
-                  {emp.name}
-                  {emp.employeeCode ? ` (${emp.employeeCode})` : ""}
+                  {emp.name || "(no name)"}{" "}
+                  {emp.employeeCode ? `(${emp.employeeCode})` : ""}
                 </option>
               ))}
             </select>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Location</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Location
+            </label>
             <select
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
+              value={filterLocationId}
+              onChange={(e) => setFilterLocationId(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
             >
               <option value="">All</option>
-              {/* Explicit ADHOC option if present in data */}
-              <option value="ADHOC">ADHOC</option>
               {locations.map((loc) => (
                 <option key={loc.id} value={loc.id}>
-                  {loc.name}
-                  {loc.code ? ` (${loc.code})` : ""}
+                  {loc.name} ({loc.code})
                 </option>
               ))}
             </select>
           </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              From (Clock In)
+            </label>
+            <input
+              type="date"
+              value={filterFrom}
+              onChange={(e) => setFilterFrom(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              To (Clock In)
+            </label>
+            <input
+              type="date"
+              value={filterTo}
+              onChange={(e) => setFilterTo(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
+            />
+          </div>
+
+          <div className="flex items-center mt-5 md:mt-0">
+            <label className="inline-flex items-center text-xs font-medium text-gray-700">
+              <input
+                type="checkbox"
+                checked={adhocOnly}
+                onChange={(e) => setAdhocOnly(e.target.checked)}
+                className="mr-2"
+              />
+              ADHOC only
+            </label>
+          </div>
+        </div>
+
+        <div className="text-xs text-gray-600 mt-1">
+          Showing {filteredShifts.length} shifts | Total hours (filtered):{" "}
+          {totalFilteredHours.toFixed(2)}
         </div>
       </section>
 
-      {/* Shifts Table */}
-      <section className="rounded border bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Shifts</h2>
+      {/* Manual create / edit */}
+      <section className="bg-white rounded-lg shadow-sm p-4 space-y-3">
+        <h2 className="text-sm font-semibold">
+          {editingShiftId ? "Edit Shift" : "Create Manual Shift"}
+        </h2>
 
-        {loading && shifts.length === 0 ? (
-          <div className="text-sm text-gray-600">Loading shifts...</div>
+        {saveError && (
+          <div className="border border-red-300 bg-red-50 text-red-800 px-3 py-2 rounded text-xs">
+            {saveError}
+          </div>
+        )}
+
+        <form onSubmit={handleSave} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Employee
+            </label>
+            <select
+              value={formEmployeeId}
+              onChange={(e) => setFormEmployeeId(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
+              required
+            >
+              <option value="">Select employee</option>
+              {employees.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.name || "(no name)"}{" "}
+                  {emp.employeeCode ? `(${emp.employeeCode})` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Location
+            </label>
+            <select
+              value={formLocationId}
+              onChange={(e) => setFormLocationId(e.target.value)}
+              className="border rounded px-2 py-1 w-full text-sm"
+              required
+            >
+              <option value="">Select location</option>
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.id}>
+                  {loc.name} ({loc.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Clock In
+            </label>
+            <div className="flex gap-1">
+              <input
+                type="date"
+                value={formClockInDate}
+                onChange={(e) => setFormClockInDate(e.target.value)}
+                className="border rounded px-2 py-1 w-full text-sm"
+                required
+              />
+              <input
+                type="time"
+                value={formClockInTime}
+                onChange={(e) => setFormClockInTime(e.target.value)}
+                className="border rounded px-2 py-1 w-full text-sm"
+                required
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Clock Out (optional)
+            </label>
+            <div className="flex gap-1">
+              <input
+                type="date"
+                value={formClockOutDate}
+                onChange={(e) => setFormClockOutDate(e.target.value)}
+                className="border rounded px-2 py-1 w-full text-sm"
+              />
+              <input
+                type="time"
+                value={formClockOutTime}
+                onChange={(e) => setFormClockOutTime(e.target.value)}
+                className="border rounded px-2 py-1 w-full text-sm"
+              />
+            </div>
+          </div>
+
+          <div className="md:col-span-4 flex items-center justify-between mt-2">
+            <div className="space-x-2">
+              <button
+                type="submit"
+                disabled={saving}
+                className="px-3 py-1 rounded bg-black text-white text-sm font-semibold disabled:opacity-60"
+              >
+                {saving
+                  ? editingShiftId
+                    ? "Saving..."
+                    : "Creating..."
+                  : editingShiftId
+                  ? "Save Changes"
+                  : "Create Shift"}
+              </button>
+              {editingShiftId && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="px-3 py-1 rounded border text-sm"
+                >
+                  Cancel Edit
+                </button>
+              )}
+            </div>
+          </div>
+        </form>
+      </section>
+
+      {/* Shifts table */}
+      <section className="bg-white rounded-lg shadow-sm p-4">
+        <h2 className="text-sm font-semibold mb-3">Shifts</h2>
+
+        {loading ? (
+          <div className="text-sm text-gray-600">Loading shifts…</div>
         ) : filteredShifts.length === 0 ? (
-          <div className="text-sm text-gray-500">No shifts found.</div>
+          <div className="text-sm text-gray-600">No shifts found.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs font-semibold text-gray-700">
-                  <th className="px-2 py-1">Employee</th>
-                  <th className="px-2 py-1">Location</th>
-                  <th className="px-2 py-1">Clock In</th>
-                  <th className="px-2 py-1">Clock Out</th>
-                  <th className="px-2 py-1">Hours</th>
-                  <th className="px-2 py-1">Map</th>
-                  <th className="px-2 py-1">Flag</th>
+                <tr className="border-b text-xs text-gray-600">
+                  <th className="text-left py-2 pr-2">Employee</th>
+                  <th className="text-left py-2 pr-2">Location</th>
+                  <th className="text-left py-2 pr-2">Clock In</th>
+                  <th className="text-left py-2 pr-2">Clock Out</th>
+                  <th className="text-left py-2 pr-2">Hours</th>
+                  <th className="text-left py-2 pr-2">ADHOC / GPS</th>
+                  <th className="text-right py-2 pl-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredShifts.map((shift) => {
-                  const isAdhoc = shift.location?.code === "ADHOC";
-                  const adhocCountForUser = adhocCountsByUser[shift.userId] || 0;
-                  const highlightAdhoc = isAdhoc && adhocCountForUser >= 3;
+                {filteredShifts.map((s) => {
+                  const isAdhoc = s.location?.code === "ADHOC";
+                  const hours = hoursBetween(s.clockIn, s.clockOut);
 
-                  const clockInDate = shift.clockIn ? new Date(shift.clockIn) : null;
-                  const clockOutDate = shift.clockOut ? new Date(shift.clockOut) : null;
+                  const clockInMapUrl =
+                    isAdhoc && s.clockInLat != null && s.clockInLng != null
+                      ? `https://www.google.com/maps?q=${s.clockInLat},${s.clockInLng}`
+                      : null;
 
-                  let hours: string | null = null;
-                  if (clockInDate && clockOutDate) {
-                    const diffMs = clockOutDate.getTime() - clockInDate.getTime();
-                    const diffHours = diffMs / (1000 * 60 * 60);
-                    hours = diffHours.toFixed(2);
-                  }
+                  const clockOutMapUrl =
+                    isAdhoc && s.clockOutLat != null && s.clockOutLng != null
+                      ? `https://www.google.com/maps?q=${s.clockOutLat},${s.clockOutLng}`
+                      : null;
 
                   return (
                     <tr
-                      key={shift.id}
-                      className={`border-b last:border-0 ${
-                        highlightAdhoc ? "bg-red-50 text-red-800" : ""
-                      }`}
+                      key={s.id}
+                      className={
+                        "border-b last:border-0" +
+                        (isAdhoc ? " bg-red-50" : "")
+                      }
                     >
-                      <td className="px-2 py-1 text-sm">
-                        {shift.user?.name || "Unknown"}
-                        {shift.user?.employeeCode && (
-                          <span className="ml-1 text-xs text-gray-500">
-                            ({shift.user.employeeCode})
-                          </span>
-                        )}
+                      <td className="py-2 pr-2">
+                        {s.user?.name || "(unknown)"}{" "}
+                        {s.user?.employeeCode
+                          ? `(${s.user.employeeCode})`
+                          : ""}
                       </td>
-
-                      <td className="px-2 py-1 text-sm">
-                        {shift.location?.name || "Unknown"}
+                      <td className="py-2 pr-2">
+                        {s.location
+                          ? `${s.location.name} (${s.location.code})`
+                          : "Unknown"}
                       </td>
-
-                      <td className="px-2 py-1 text-xs">
-                        {clockInDate ? clockInDate.toLocaleString() : "—"}
+                      <td className="py-2 pr-2">
+                        {formatDateTime(s.clockIn)}
                       </td>
-
-                      <td className="px-2 py-1 text-xs">
-                        {clockOutDate ? clockOutDate.toLocaleString() : "—"}
+                      <td className="py-2 pr-2">
+                        {formatDateTime(s.clockOut)}
                       </td>
-
-                      <td className="px-2 py-1 text-xs">{hours ?? "—"}</td>
-
-                      {/* View in Map (clock-in GPS) */}
-                      <td className="px-2 py-1 text-xs">
-                        {shift.clockInLat != null && shift.clockInLng != null ? (
-                          <a
-                            href={`https://www.google.com/maps?q=${shift.clockInLat},${shift.clockInLng}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline"
-                          >
-                            View in Map
-                          </a>
-                        ) : (
-                          <span className="text-gray-400">No GPS</span>
-                        )}
+                      <td className="py-2 pr-2">
+                        {hours.toFixed(2)}
                       </td>
-
-                      {/* ADHOC flag */}
-                      <td className="px-2 py-1 text-xs">
+                      <td className="py-2 pr-2 text-xs">
                         {isAdhoc ? (
-                          adhocCountForUser >= 3 ? (
-                            <span className="rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800">
-                              ADHOC – HIGH ({adhocCountForUser})
+                          <div className="space-y-1">
+                            <span className="inline-block px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-semibold">
+                              ADHOC
                             </span>
-                          ) : (
-                            <span className="rounded bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800">
-                              ADHOC ({adhocCountForUser})
-                            </span>
-                          )
+                            {clockInMapUrl && (
+                              <div>
+                                <a
+                                  href={clockInMapUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-600 hover:underline"
+                                >
+                                  View clock-in on map
+                                </a>
+                              </div>
+                            )}
+                            {clockOutMapUrl && (
+                              <div>
+                                <a
+                                  href={clockOutMapUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-600 hover:underline"
+                                >
+                                  View clock-out on map
+                                </a>
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-gray-300 text-[10px]">—</span>
+                          <span className="text-gray-500">—</span>
                         )}
+                      </td>
+                      <td className="py-2 pl-2 text-right space-x-2">
+                        <button
+                          className="text-xs px-2 py-1 border rounded hover:bg-gray-50"
+                          onClick={() => startEdit(s)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="text-xs px-2 py-1 border rounded text-red-700 hover:bg-red-50"
+                          onClick={() => handleDelete(s.id)}
+                        >
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   );
@@ -343,6 +648,6 @@ export default function ShiftsPage() {
           </div>
         )}
       </section>
-    </div>
+    </main>
   );
 }
