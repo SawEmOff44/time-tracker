@@ -18,10 +18,10 @@ export default function RootLayout({
     <html lang="en">
       <body className="min-h-screen bg-white text-gray-900">
         <div className="min-h-screen flex flex-col">
-          {/* Global header */}
+          {/* Global header (public) */}
           <header className="border-b bg-white/80 backdrop-blur">
             <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
-              {/* Logo now always sends to /clock */}
+              {/* Logo always sends to /clock */}
               <Link href="/clock" className="flex items-center gap-3">
                 <Image
                   src="/rhinehart-logo.jpeg"
@@ -36,37 +36,19 @@ export default function RootLayout({
                 </span>
               </Link>
 
-              {/* Admin nav (only useful once logged in) */}
+              {/* Simple top-level nav */}
               <nav className="flex items-center gap-3 text-sm">
+                <Link
+                  href="/clock"
+                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
+                >
+                  Clock In / Out
+                </Link>
                 <Link
                   href="/admin"
                   className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
                 >
-                  Dashboard
-                </Link>
-                <Link
-                  href="/admin/employees"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Employees
-                </Link>
-                <Link
-                  href="/admin/locations"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Locations
-                </Link>
-                <Link
-                  href="/admin/shifts"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Shifts
-                </Link>
-                <Link
-                  href="/admin/payroll"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Payroll
+                  Admin
                 </Link>
               </nav>
             </div>
