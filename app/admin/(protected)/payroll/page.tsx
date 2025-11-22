@@ -1,264 +1,224 @@
-"use client";
+// app/admin/(protected)/payroll/page.tsx
 
-import { useEffect, useMemo, useState } from "react";
+import { prisma } from "@/lib/prisma";
 
-type Role = "EMPLOYEE" | "ADMIN";
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-type User = {
-  id: string;
-  name: string;
-  employeeCode: string | null;
-  role: Role;
+type PayrollPageProps = {
+  searchParams?: {
+    start?: string;
+    end?: string;
+  };
 };
 
-type Location = {
-  id: string;
-  name: string;
-  code: string | null;
-};
+function parseDateOnly(value?: string): Date | undefined {
+  if (!value) return undefined;
+  // Expecting YYYY-MM-DD from <input type="date">
+  const iso = `${value}T00:00:00`;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
 
-type Shift = {
-  id: string;
-  userId: string;
-  locationId: string | null;
-  clockIn: string;
-  clockOut: string | null;
-  user: User | null;
-  location: Location | null;
-};
+export default async function PayrollPage({ searchParams }: PayrollPageProps) {
+  const startParam = searchParams?.start || "";
+  const endParam = searchParams?.end || "";
 
-type ApiError = string | null;
+  const startDate = parseDateOnly(startParam);
+  const endDate = parseDateOnly(endParam);
 
-type EmployeeSummary = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
-  totalHours: number;
-  shiftCount: number;
-};
-
-export default function PayrollPage() {
-  const [shifts, setShifts] = useState<Shift[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<ApiError>(null);
-
-  const [fromDate, setFromDate] = useState<string>("");
-  const [toDate, setToDate] = useState<string>("");
-
-  async function loadShifts() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/shifts");
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error || "Failed to load shifts");
-      }
-      const json = (await res.json()) as Shift[];
-      setShifts(json);
-    } catch (err: any) {
-      console.error("Error loading payroll shifts:", err);
-      setError(err.message || "Failed to load shifts");
-    } finally {
-      setLoading(false);
+  // Build Prisma filter
+  const where: any = {};
+  if (startDate || endDate) {
+    where.clockIn = {};
+    if (startDate) {
+      where.clockIn.gte = startDate;
+    }
+    if (endDate) {
+      // End of day for the end date
+      const endOfDay = new Date(endDate);
+      endOfDay.setHours(23, 59, 59, 999);
+      where.clockIn.lte = endOfDay;
     }
   }
 
-  useEffect(() => {
-    void loadShifts();
-  }, []);
+  const shifts = await prisma.shift.findMany({
+    where,
+    orderBy: { clockIn: "desc" },
+    include: {
+      user: true,
+      location: true,
+    },
+  });
 
-  // Default date range: last 14 days if user hasn't picked anything
-  useEffect(() => {
-    if (!fromDate && !toDate) {
-      const now = new Date();
-      const fourteenDaysAgo = new Date(
-        now.getTime() - 14 * 24 * 60 * 60 * 1000
-      );
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const mkDate = (d: Date) =>
-        `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-      setFromDate(mkDate(fourteenDaysAgo));
-      setToDate(mkDate(now));
-    }
-  }, [fromDate, toDate]);
+  const rows = shifts.map((s) => {
+    const clockIn = s.clockIn ? new Date(s.clockIn) : null;
+    const clockOut = s.clockOut ? new Date(s.clockOut) : null;
 
-  const filteredShifts = useMemo(() => {
-    if (!fromDate && !toDate) return shifts;
+    const hours =
+      clockIn && clockOut
+        ? (clockOut.getTime() - clockIn.getTime()) / 1000 / 60 / 60
+        : 0;
 
-    return shifts.filter((s) => {
-      if (!s.clockOut) return false; // only completed shifts count
-      const ci = new Date(s.clockIn);
+    return {
+      id: s.id,
+      employee: s.user?.name || "Unknown",
+      code: s.user?.employeeCode || "",
+      date: clockIn ? clockIn.toISOString().slice(0, 10) : "",
+      clockIn: clockIn ? clockIn.toLocaleTimeString() : "",
+      clockOut: clockOut ? clockOut.toLocaleTimeString() : "",
+      hours,
+      location: s.location?.name || "Unknown",
+    };
+  });
 
-      if (fromDate) {
-        const from = new Date(fromDate);
-        from.setHours(0, 0, 0, 0);
-        if (ci < from) return false;
-      }
+  const totalHours = rows.reduce((sum, r) => sum + (r.hours || 0), 0);
 
-      if (toDate) {
-        const to = new Date(toDate);
-        to.setHours(23, 59, 59, 999);
-        if (ci > to) return false;
-      }
-
-      return true;
-    });
-  }, [shifts, fromDate, toDate]);
-
-  const summaries: EmployeeSummary[] = useMemo(() => {
-    const map = new Map<string, EmployeeSummary>();
-
-    for (const s of filteredShifts) {
-      if (!s.clockOut) continue;
-
-      const ci = new Date(s.clockIn);
-      const co = new Date(s.clockOut);
-      if (co <= ci) continue;
-
-      const diffHours =
-        (co.getTime() - ci.getTime()) / (1000 * 60 * 60);
-
-      const userId = s.userId;
-      const existing = map.get(userId);
-      if (!existing) {
-        map.set(userId, {
-          userId,
-          name: s.user?.name || "Unknown",
-          employeeCode: s.user?.employeeCode ?? null,
-          totalHours: diffHours,
-          shiftCount: 1,
-        });
-      } else {
-        existing.totalHours += diffHours;
-        existing.shiftCount += 1;
-      }
-    }
-
-    return Array.from(map.values()).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-  }, [filteredShifts]);
-
-  const grandTotalHours = useMemo(
-    () => summaries.reduce((sum, s) => sum + s.totalHours, 0),
-    [summaries]
-  );
+  // Build CSV export URL with same filters
+  const search = new URLSearchParams();
+  if (startParam) search.set("start", startParam);
+  if (endParam) search.set("end", endParam);
+  const exportHref =
+    "/api/export/payroll" + (search.toString() ? `?${search.toString()}` : "");
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <main className="flex-1 p-6">
+      {/* Header + Export */}
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold">Payroll / Shift Summary</h1>
+          <h1 className="text-2xl font-bold">Payroll &amp; Shifts</h1>
           <p className="text-sm text-gray-600">
-            Hours per employee over a selected date range.
+            Review recorded shifts and export to CSV for payroll.
           </p>
         </div>
-        <button
-          onClick={() => void loadShifts()}
-          disabled={loading}
-          className="inline-flex items-center rounded border border-gray-300 bg-white px-3 py-1 text-sm font-medium hover:bg-gray-50 disabled:opacity-60"
+
+        <a
+          href={exportHref}
+          className="inline-flex items-center px-4 py-2 rounded bg-black text-white text-sm font-medium hover:bg-gray-800"
         >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
-      </header>
+          Download CSV
+        </a>
+      </div>
 
-      {error && (
-        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      {/* Filters + summary card */}
-      <section className="rounded border bg-white p-4 shadow-sm space-y-4">
-        <div className="flex flex-wrap gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">
-              From date
-            </label>
-            <input
-              type="date"
-              className="border rounded px-2 py-1 text-sm"
-              value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-1">
-              To date
-            </label>
-            <input
-              type="date"
-              className="border rounded px-2 py-1 text-sm"
-              value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
-            />
-          </div>
+      {/* Filters */}
+      <form
+        method="GET"
+        className="mb-4 flex flex-col md:flex-row md:items-end gap-3"
+      >
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 mb-1">
+            Start Date
+          </label>
+          <input
+            type="date"
+            name="start"
+            defaultValue={startParam}
+            className="border rounded px-2 py-1 text-sm"
+          />
         </div>
 
-        <div className="mt-2 rounded border bg-gray-50 p-3">
-          <div className="text-xs font-semibold uppercase text-gray-600">
-            Total Hours in Range
-          </div>
-          <div className="mt-1 text-2xl font-bold">
-            {grandTotalHours.toFixed(2)}
-          </div>
-          <div className="mt-1 text-xs text-gray-500">
-            Based on completed shifts with clock-in inside the selected range.
-          </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-700 mb-1">
+            End Date
+          </label>
+          <input
+            type="date"
+            name="end"
+            defaultValue={endParam}
+            className="border rounded px-2 py-1 text-sm"
+          />
         </div>
-      </section>
 
-      {/* Employee summaries */}
-      <section className="rounded border bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Hours by Employee</h2>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            className="px-3 py-2 rounded bg-black text-white text-xs font-semibold hover:bg-gray-800"
+          >
+            Apply
+          </button>
+          {(startParam || endParam) && (
+            <a
+              href="/admin/payroll"
+              className="px-3 py-2 rounded border text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50"
+            >
+              Clear
+            </a>
+          )}
+        </div>
+      </form>
 
-        {summaries.length === 0 ? (
-          <div className="text-sm text-gray-500">
-            No completed shifts in this range.
+      {/* Summary */}
+      <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+        <div className="text-sm text-gray-700">
+          <span className="font-semibold">Total Shifts:</span> {rows.length}
+        </div>
+        <div className="text-sm text-gray-700">
+          <span className="font-semibold">Total Hours:</span>{" "}
+          {totalHours.toFixed(2)}
+        </div>
+        {startParam || endParam ? (
+          <div className="text-xs text-gray-500">
+            Filtered by{" "}
+            {startParam && (
+              <>
+                from <span className="font-mono">{startParam}</span>{" "}
+              </>
+            )}
+            {endParam && (
+              <>
+                to <span className="font-mono">{endParam}</span>
+              </>
+            )}
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs font-semibold text-gray-700">
-                  <th className="px-2 py-1">Employee</th>
-                  <th className="px-2 py-1">Shifts</th>
-                  <th className="px-2 py-1">Total Hours</th>
-                  <th className="px-2 py-1">Avg Hours / Shift</th>
+        ) : null}
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto border rounded-lg bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-100 border-b">
+            <tr>
+              <th className="px-3 py-2 text-left font-semibold">Employee</th>
+              <th className="px-3 py-2 text-left font-semibold">Code</th>
+              <th className="px-3 py-2 text-left font-semibold">Date</th>
+              <th className="px-3 py-2 text-left font-semibold">Clock In</th>
+              <th className="px-3 py-2 text-left font-semibold">Clock Out</th>
+              <th className="px-3 py-2 text-right font-semibold">Hours</th>
+              <th className="px-3 py-2 text-left font-semibold">Location</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={7}
+                  className="px-3 py-6 text-center text-gray-500"
+                >
+                  No shifts found for this period.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => (
+                <tr
+                  key={r.id}
+                  className="border-b last:border-b-0 hover:bg-gray-50"
+                >
+                  <td className="px-3 py-2">{r.employee}</td>
+                  <td className="px-3 py-2">{r.code}</td>
+                  <td className="px-3 py-2">{r.date}</td>
+                  <td className="px-3 py-2">{r.clockIn}</td>
+                  <td className="px-3 py-2">{r.clockOut}</td>
+                  <td className="px-3 py-2 text-right">
+                    {r.hours ? r.hours.toFixed(2) : "-"}
+                  </td>
+                  <td className="px-3 py-2">{r.location}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {summaries.map((s) => {
-                  const avg =
-                    s.shiftCount > 0
-                      ? s.totalHours / s.shiftCount
-                      : 0;
-                  return (
-                    <tr key={s.userId} className="border-b last:border-0">
-                      <td className="px-2 py-1 text-sm">
-                        {s.name}
-                        {s.employeeCode && (
-                          <span className="ml-1 text-xs text-gray-500">
-                            ({s.employeeCode})
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-2 py-1 text-xs">{s.shiftCount}</td>
-                      <td className="px-2 py-1 text-xs">
-                        {s.totalHours.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-1 text-xs">
-                        {avg.toFixed(2)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </main>
   );
 }

@@ -1,8 +1,9 @@
-// app/api/admin/employees/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import type { Role } from "@prisma/client";
+import { cookies } from "next/headers";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 function requireAdmin() {
   const cookieStore = cookies();
@@ -10,50 +11,48 @@ function requireAdmin() {
   return !!session;
 }
 
-// GET /api/admin/employees → list all employees
-export async function GET() {
+// DELETE /api/admin/employees/:id
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   if (!requireAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const id = params.id;
+
   try {
-    const rawEmployees = await prisma.user.findMany({
-      orderBy: { name: "asc" },
-      select: {
-        id: true,
-        name: true,
-        employeeCode: true,
-        role: true,
-        active: true,
-        pinHash: true, // real DB field
-      },
+    // Delete all shifts tied to this user
+    await prisma.shift.deleteMany({
+      where: { userId: id },
     });
 
-    const employees = rawEmployees.map((e) => ({
-      id: e.id,
-      name: e.name,
-      employeeCode: e.employeeCode,
-      role: e.role,
-      active: e.active,
-      // expose as `pin` to the UI
-      pin: e.pinHash ?? null,
-    }));
+    // Delete user
+    await prisma.user.delete({
+      where: { id },
+    });
 
-    return NextResponse.json(employees);
+    return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("Error loading employees:", err);
+    console.error("Failed to delete employee:", err);
     return NextResponse.json(
-      { error: "Failed to load employees" },
+      { error: "Failed to delete employee" },
       { status: 500 }
     );
   }
 }
 
-// POST /api/admin/employees → create new employee
-export async function POST(req: NextRequest) {
+// PATCH /api/admin/employees/:id
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
   if (!requireAdmin()) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const id = params.id;
 
   try {
     const body = await req.json().catch(() => null);
@@ -65,81 +64,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { name, employeeCode, role, pin } = body as {
-      name?: string;
-      employeeCode?: string;
-      role?: string;
-      pin?: string;
-    };
+    const { name, employeeCode, role, active, pin } = body;
 
-    if (!name || !employeeCode) {
-      return NextResponse.json(
-        { error: "name and employeeCode are required" },
-        { status: 400 }
-      );
+    const data: any = {};
+
+    if (typeof name === "string") data.name = name;
+    if (typeof employeeCode === "string") data.employeeCode = employeeCode;
+    if (typeof role === "string") data.role = role;
+    if (typeof active === "boolean") data.active = active;
+
+    // Update PIN (stored as pinHash)
+    if (typeof pin === "string" && pin.trim() !== "") {
+      data.pinHash = pin;
     }
 
-    const normalizedRole: Role =
-      (role === "ADMIN" || role === "WORKER" ? role : "WORKER") as Role;
+    const updated = await prisma.user.update({
+      where: { id },
+      data,
+    });
 
-    let pinToStore: string | null = null;
-    if (typeof pin === "string" && pin.trim().length > 0) {
-      pinToStore = pin.trim();
-    }
-
-    let created;
-    try {
-      created = await prisma.user.create({
-        data: {
-          name,
-          employeeCode,
-          role: normalizedRole,
-          active: true,
-          pinHash: pinToStore, // store in pinHash
-        },
-        select: {
-          id: true,
-          name: true,
-          employeeCode: true,
-          role: true,
-          active: true,
-          pinHash: true,
-        },
-      });
-    } catch (err: any) {
-      // Handle common Prisma constraint errors a bit nicer
-      if (err?.code === "P2002") {
-        // unique constraint
-        return NextResponse.json(
-          {
-            error:
-              "An employee with that code already exists. Use a unique employee code.",
-          },
-          { status: 400 }
-        );
-      }
-
-      console.error("Prisma error creating employee:", err);
-      return NextResponse.json(
-        { error: "Database error creating employee" },
-        { status: 500 }
-      );
-    }
-
-    const result = {
-      id: created.id,
-      name: created.name,
-      employeeCode: created.employeeCode,
-      role: created.role,
-      active: created.active,
-      pin: created.pinHash ?? null,
-    };
-
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json(updated);
   } catch (err) {
-    console.error("Error creating employee:", err);
+    console.error("Employee update failed:", err);
     return NextResponse.json(
-      { error: "Failed to create employee" },
+      { error: "Failed to update employee" },
       { status: 500 }
     );
   }
