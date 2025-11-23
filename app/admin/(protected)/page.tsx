@@ -4,15 +4,13 @@ import { startOfMonth } from "date-fns";
 
 type DashboardShift = {
   id: string;
-  clockIn: Date | null;
+  clockIn: Date;
   clockOut: Date | null;
   user: {
-    id: string;
     name: string;
     employeeCode: string | null;
   } | null;
   location: {
-    id: string;
     name: string;
     radiusMeters: number | null;
   } | null;
@@ -39,9 +37,8 @@ function formatHours(clockIn: Date | null, clockOut: Date | null) {
   return hours.toFixed(2);
 }
 
-// ADHOC = zero-radius location
 function isAdhocShift(shift: { location: { radiusMeters: number | null } | null }) {
-  return !!(shift.location && shift.location.radiusMeters === 0);
+  return !!shift.location && shift.location.radiusMeters === 0;
 }
 
 export default async function AdminDashboardPage() {
@@ -57,47 +54,60 @@ export default async function AdminDashboardPage() {
   );
   const monthStart = startOfMonth(now);
 
-  // core stats + recent shifts
-  const [totalEmployees, activeEmployees, totalLocations, shiftsTodayRaw, recentShiftsRaw] =
-    await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { active: true } }),
-      prisma.location.count({ where: { active: true } }),
-      prisma.shift.count({
-        where: {
-          clockIn: {
-            gte: todayStart,
-          },
-        },
-      }),
-      prisma.shift.findMany({
-        orderBy: { clockIn: "desc" },
-        take: 10,
-        include: {
-          user: true,
-          location: true,
-        },
-      }),
-    ]);
-
-  const shiftsToday = shiftsTodayRaw ?? 0;
-  const recentShifts = recentShiftsRaw as DashboardShift[];
-
-  // ADHOC analytics
-  const adhocShiftsThisMonth = await prisma.shift.findMany({
-    where: {
-      clockIn: { gte: monthStart },
-      location: {
-        radiusMeters: 0,
+  const [
+    activeEmployees,
+    totalEmployees,
+    activeLocations,
+    shiftsToday,
+    recentShiftsRaw,
+    adhocShiftsThisMonth,
+  ] = await Promise.all([
+    prisma.user.count({ where: { active: true } }),
+    prisma.user.count(),
+    prisma.location.count({ where: { active: true } }),
+    prisma.shift.count({
+      where: {
+        clockIn: { gte: todayStart },
       },
-    },
-    include: {
-      user: true,
-      location: true,
-    },
-  });
+    }),
+    prisma.shift.findMany({
+      orderBy: { clockIn: "desc" },
+      take: 10,
+      include: {
+        user: true,
+        location: true,
+      },
+    }),
+    prisma.shift.findMany({
+      where: {
+        clockIn: { gte: monthStart },
+        location: {
+          radiusMeters: 0,
+        },
+      },
+      include: {
+        user: true,
+        location: true,
+      },
+    }),
+  ]);
 
-  const adhocCounts = new Map<
+  const recentShifts: DashboardShift[] = recentShiftsRaw.map((s) => ({
+    id: s.id,
+    clockIn: s.clockIn,
+    clockOut: s.clockOut,
+    user: s.user
+      ? {
+          name: s.user.name,
+          employeeCode: s.user.employeeCode,
+        }
+      : null,
+    location: s.location
+      ? { name: s.location.name, radiusMeters: s.location.radiusMeters }
+      : null,
+  }));
+
+  const adhocCountsByUser = new Map<
     string,
     { userName: string; employeeCode: string | null; count: number }
   >();
@@ -105,11 +115,11 @@ export default async function AdminDashboardPage() {
   for (const shift of adhocShiftsThisMonth) {
     if (!shift.user) continue;
     const key = shift.user.id;
-    const existing = adhocCounts.get(key);
+    const existing = adhocCountsByUser.get(key);
     if (existing) {
       existing.count += 1;
     } else {
-      adhocCounts.set(key, {
+      adhocCountsByUser.set(key, {
         userName: shift.user.name,
         employeeCode: shift.user.employeeCode,
         count: 1,
@@ -117,71 +127,54 @@ export default async function AdminDashboardPage() {
     }
   }
 
-  const suspiciousAdhocUsers = Array.from(adhocCounts.values())
+  const suspiciousAdhocUsers = Array.from(adhocCountsByUser.values())
     .filter((u) => u.count >= 3)
     .sort((a, b) => b.count - a.count);
 
   const totalAdhocShiftsThisMonth = adhocShiftsThisMonth.length;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* HEADER */}
-      <div>
-        <h1 className="text-xl font-semibold text-gray-900 sm:text-2xl">
-          Dashboard
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Overview of time tracking activity across Rhinehart Co.
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-semibold text-slate-900">Dashboard</h1>
+        <p className="text-sm text-slate-600">
+          Overview of today&apos;s clock-ins, active locations, and ADHOC
+          activity.
         </p>
       </div>
 
-      {/* STATS – compact, responsive, no horizontal overflow */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-            Active employees
-          </div>
-          <div className="mt-1 text-2xl font-semibold text-gray-900">
-            {activeEmployees}
-          </div>
-          <p className="mt-1 text-xs text-gray-400">
-            {totalEmployees} total in system
+      {/* TOP STATS */}
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="card">
+          <div className="card-label">Active employees</div>
+          <div className="card-value">{activeEmployees}</div>
+          <p className="card-sub">
+            {totalEmployees} total in system · {activeEmployees} currently active
           </p>
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-            Active locations
-          </div>
-          <div className="mt-1 text-2xl font-semibold text-gray-900">
-            {totalLocations}
-          </div>
-          <p className="mt-1 text-xs text-gray-400">
-            Job sites configured for GPS radius
+        <div className="card">
+          <div className="card-label">Active job sites</div>
+          <div className="card-value">{activeLocations}</div>
+          <p className="card-sub">Locations with GPS radius configured</p>
+        </div>
+
+        <div className="card">
+          <div className="card-label">Shifts today</div>
+          <div className="card-value">{shiftsToday}</div>
+          <p className="card-sub">
+            Clock-ins since midnight (Central time zone)
           </p>
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
-            Shifts today
-          </div>
-          <div className="mt-1 text-2xl font-semibold text-gray-900">
-            {shiftsToday}
-          </div>
-          <p className="mt-1 text-xs text-gray-400">
-            Clock-ins since midnight (local time)
-          </p>
-        </div>
-
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 shadow-sm">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
-            ADHOC shifts this month
-          </div>
-          <div className="mt-1 text-2xl font-semibold text-amber-900">
+        <div className="card card-amber">
+          <div className="card-label text-amber-900">ADHOC shifts (month)</div>
+          <div className="card-value text-amber-950">
             {totalAdhocShiftsThisMonth}
           </div>
-          <p className="mt-1 text-xs text-amber-800">
-            Clock-ins to zero-radius locations
+          <p className="card-sub text-amber-900/80">
+            Zero-radius locations only
             {suspiciousAdhocUsers.length > 0 && (
               <>
                 {" · "}
@@ -194,98 +187,83 @@ export default async function AdminDashboardPage() {
         </div>
       </div>
 
-      {/* MAIN CONTENT – 2-column on large screens, stacked on small */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* RECENT SHIFTS TABLE */}
-        <div className="lg:col-span-2 rounded-lg border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+      {/* LOWER GRID */}
+      <div className="grid gap-6 xl:grid-cols-3">
+        {/* Recent shifts table */}
+        <section className="xl:col-span-2 card">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">
+              <h2 className="text-sm font-semibold text-slate-900">
                 Recent shifts
               </h2>
-              <p className="text-xs text-gray-500">
+              <p className="text-xs text-slate-500">
                 Last 10 clock-in / clock-out records.
               </p>
             </div>
           </div>
 
-          <div className="w-full overflow-x-auto">
-            <table className="w-full table-fixed border-collapse text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="w-1/4 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Employee
-                  </th>
-                  <th className="w-1/5 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Location
-                  </th>
-                  <th className="w-1/5 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Clock in
-                  </th>
-                  <th className="w-1/5 px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Clock out
-                  </th>
-                  <th className="w-[70px] px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    Hours
-                  </th>
-                  <th className="w-[80px] px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                    ADHOC
-                  </th>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-xs uppercase tracking-wide text-slate-500">
+                  <th className="table-head-cell">Employee</th>
+                  <th className="table-head-cell">Location</th>
+                  <th className="table-head-cell">Clock in</th>
+                  <th className="table-head-cell">Clock out</th>
+                  <th className="table-head-cell text-right">Hours</th>
+                  <th className="table-head-cell text-center">ADHOC</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100 bg-white">
+              <tbody className="divide-y divide-slate-100">
                 {recentShifts.length === 0 && (
                   <tr>
                     <td
                       colSpan={6}
-                      className="px-4 py-6 text-center text-sm text-gray-400"
+                      className="px-3 py-6 text-center text-sm text-slate-400"
                     >
                       No shifts recorded yet.
                     </td>
                   </tr>
                 )}
 
-                {recentShifts.map((shift: DashboardShift) => {
-                  const adhoc = isAdhocShift(shift);
+                {recentShifts.map((shift) => {
+                  const adhoc = isAdhocShift({
+                    location: shift.location
+                      ? { radiusMeters: shift.location.radiusMeters }
+                      : null,
+                  });
+
                   return (
-                    <tr key={shift.id}>
-                      <td className="px-3 py-2 align-top">
-                        <div className="truncate text-sm font-medium text-gray-900">
+                    <tr
+                      key={shift.id}
+                      className="hover:bg-slate-50/80 transition-colors"
+                    >
+                      <td className="table-cell align-top">
+                        <div className="font-medium text-slate-900">
                           {shift.user?.name ?? "Unknown"}
                         </div>
-                        <div className="mt-0.5 text-[11px] uppercase tracking-wide text-gray-400">
+                        <div className="text-[11px] uppercase tracking-wide text-slate-500">
                           {shift.user?.employeeCode ?? "—"}
                         </div>
                       </td>
-                      <td className="px-3 py-2 align-top text-sm text-gray-700">
-                        <span className="block truncate">
-                          {shift.location?.name ?? "—"}
-                        </span>
+                      <td className="table-cell align-top text-slate-800">
+                        {shift.location?.name ?? "—"}
                       </td>
-                      <td className="px-3 py-2 align-top text-xs text-gray-700">
-                        {formatDateTimeLocal(
-                          shift.clockIn ? new Date(shift.clockIn) : null
-                        )}
+                      <td className="table-cell align-top text-slate-800">
+                        {formatDateTimeLocal(shift.clockIn)}
                       </td>
-                      <td className="px-3 py-2 align-top text-xs text-gray-700">
-                        {formatDateTimeLocal(
-                          shift.clockOut ? new Date(shift.clockOut) : null
-                        )}
+                      <td className="table-cell align-top text-slate-800">
+                        {formatDateTimeLocal(shift.clockOut)}
                       </td>
-                      <td className="px-3 py-2 align-top text-sm text-gray-700">
-                        {shift.clockIn && shift.clockOut
-                          ? formatHours(
-                              new Date(shift.clockIn),
-                              new Date(shift.clockOut)
-                            )
-                          : "—"}
+                      <td className="table-cell align-top text-right text-slate-800">
+                        {formatHours(shift.clockIn, shift.clockOut)}
                       </td>
-                      <td className="px-3 py-2 align-top">
+                      <td className="table-cell align-top text-center">
                         <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
                             adhoc
-                              ? "bg-amber-100 text-amber-800"
-                              : "bg-emerald-50 text-emerald-700"
+                              ? "bg-amber-100 text-amber-800 border border-amber-200"
+                              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
                           }`}
                         >
                           {adhoc ? "ADHOC" : "Standard"}
@@ -297,12 +275,12 @@ export default async function AdminDashboardPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
 
-        {/* ADHOC RISK PANEL */}
-        <div className="rounded-lg border border-amber-200 bg-amber-50/80 shadow-sm">
-          <div className="border-b border-amber-100 px-4 py-3">
-            <h2 className="text-sm font-semibold text-amber-900">
+        {/* ADHOC risk panel */}
+        <section className="card bg-amber-50/80 border-amber-200">
+          <div className="border-b border-amber-100 pb-3 mb-3">
+            <h2 className="text-sm font-semibold text-amber-950">
               ADHOC risk overview
             </h2>
             <p className="text-xs text-amber-800">
@@ -310,41 +288,41 @@ export default async function AdminDashboardPage() {
             </p>
           </div>
 
-          <div className="space-y-3 px-4 py-4">
+          <div className="space-y-3">
             {suspiciousAdhocUsers.length === 0 && (
-              <p className="text-xs text-amber-800">
-                No workers over the ADHOC threshold yet. Keep an eye on this
-                panel for potential compliance issues.
+              <p className="text-xs text-amber-900">
+                No one is over the ADHOC threshold yet. Use this panel to spot
+                patterns in off-site or manual clock-ins.
               </p>
             )}
 
             {suspiciousAdhocUsers.map((u) => (
               <div
                 key={u.userName + (u.employeeCode ?? "")}
-                className="flex items-center justify-between rounded-md bg-white/80 px-3 py-2"
+                className="flex items-center justify-between rounded-lg bg-white/80 px-3 py-2 border border-amber-100"
               >
                 <div>
                   <div className="text-sm font-medium text-amber-950">
                     {u.userName}
                   </div>
-                  <div className="text-xs text-amber-700">
+                  <div className="text-xs text-amber-800">
                     {u.employeeCode ?? "No code"} · {u.count} ADHOC shifts
                   </div>
                 </div>
-                <div className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                <div className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">
                   {u.count}
                 </div>
               </div>
             ))}
 
             {suspiciousAdhocUsers.length > 0 && (
-              <p className="pt-1 text-[11px] leading-snug text-amber-800">
-                Review these workers’ ADHOC clock-ins on the Shifts tab and use
-                the map links to confirm on-site activity.
+              <p className="pt-1 text-[11px] leading-snug text-amber-900/90">
+                Cross-check these workers on the Shifts tab and use the map
+                links to verify on-site activity.
               </p>
             )}
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

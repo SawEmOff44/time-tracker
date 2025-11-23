@@ -12,3 +12,79 @@ body {
   padding: 0;
   background-color: #ffffff;
 }
+
+/* --- Rhinehart Time: global admin UI polish --------------------------- */
+
+/* Base typography */
+body {
+  color: #1e293b !important; /* slate-800 */
+}
+
+/* Make all generic "muted" text still readable */
+.text-gray-500,
+.text-gray-400,
+.text-slate-500,
+.text-slate-400 {
+  color: #475569 !important; /* slate-600 */
+}
+
+/* Inputs, tables, labels */
+input,
+select,
+textarea,
+label,
+th,
+td {
+  color: #1e293b !important; /* slate-800 */
+}
+
+/* Sidebar helpers (used in AdminLayout) */
+.sidebar-link {
+  color: #e2e8f0; /* slate-200 */
+}
+
+.sidebar-link-active {
+  color: #0f172a; /* slate-900 on amber bg */
+}
+
+/* Generic card styling */
+.card {
+  @apply rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm;
+}
+
+.card-amber {
+  @apply border-amber-200 bg-amber-50;
+}
+
+.card-label {
+  @apply text-xs font-medium uppercase tracking-wide text-slate-500;
+}
+
+.card-value {
+  @apply mt-2 text-2xl font-semibold text-slate-900;
+}
+
+.card-sub {
+  @apply mt-1 text-xs text-slate-500;
+}
+
+/* Table helpers */
+.table-head-cell {
+  @apply px-3 py-2 text-left;
+}
+
+.table-cell {
+  @apply px-3 py-2 align-middle;
+}
+
+/* Make admin page background feel more "app-like" */
+html,
+body {
+  background-color: #020617; /* slate-950 baseline; main area overrides */
+}
+
+/* Keep your map / Leaflet container from shrinking oddly */
+.leaflet-container {
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+}
