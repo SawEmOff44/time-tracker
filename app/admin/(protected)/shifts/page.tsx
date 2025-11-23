@@ -1,181 +1,243 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { formatDateTimeLocal } from "@/lib/datetime";
 
-type Shift = any;
-type Employee = any;
-type Location = any;
+type EmployeeOption = {
+  id: string;
+  name: string;
+  employeeCode: string | null;
+};
 
-function formatDate(value?: string | null) {
-  if (!value) return "—";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
-}
+type LocationOption = {
+  id: string;
+  name: string;
+};
 
-function toLocalInputValue(value?: string | null) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const mm = pad(d.getMonth() + 1);
-  const dd = pad(d.getDate());
-  const hh = pad(d.getHours());
-  const min = pad(d.getMinutes());
-  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
-}
+type Shift = {
+  id: string;
+  employeeId: string; // backend naming for create
+  user: {
+    id: string;
+    name: string;
+    employeeCode: string | null;
+  };
+  locationId: string | null;
+  location: {
+    id: string;
+    name: string;
+  } | null;
+  clockIn: string;
+  clockOut: string | null;
+  clockInLat: number | null;
+  clockInLng: number | null;
+};
+
+type ApiShiftResponse = Shift[];
 
 export default function AdminShiftsPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [locations, setLocations] = useState<LocationOption[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [employeeFilter, setEmployeeFilter] = useState("");
-  const [locationFilter, setLocationFilter] = useState("");
+  const [filterEmployee, setFilterEmployee] = useState("");
+  const [filterLocation, setFilterLocation] = useState("");
   const [showAdhocOnly, setShowAdhocOnly] = useState(false);
 
-  const [formOpen, setFormOpen] = useState(false);
-  const [editingShiftId, setEditingShiftId] = useState<string | null>(null);
-  const [formEmployeeId, setFormEmployeeId] = useState("");
-  const [formLocationId, setFormLocationId] = useState("");
-  const [formClockIn, setFormClockIn] = useState("");
-  const [formClockOut, setFormClockOut] = useState("");
-  const [formError, setFormError] = useState<string | null>(null);
-  const [formSaving, setFormSaving] = useState(false);
+  const [editingShift, setEditingShift] = useState<Shift | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  async function fetchShifts() {
+  // Create / edit form state
+  const [formEmployeeId, setFormEmployeeId] = useState<string>("");
+  const [formLocationId, setFormLocationId] = useState<string>("");
+  const [formClockIn, setFormClockIn] = useState<string>("");
+  const [formClockOut, setFormClockOut] = useState<string>("");
+
+  // ----- helpers -----
+
+  function isAdhocShift(shift: Shift): boolean {
+    const name = shift.location?.name ?? "";
+    return name.toLowerCase().includes("adhoc");
+  }
+
+  function computeHours(shift: Shift): string {
+    if (!shift.clockIn || !shift.clockOut) return "—";
+    const start = new Date(shift.clockIn).getTime();
+    const end = new Date(shift.clockOut).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return "—";
+    const hours = (end - start) / (1000 * 60 * 60);
+    return `${hours.toFixed(2)}`;
+  }
+
+  function mapUrlForShift(shift: Shift): string | null {
+    if (
+      shift.clockInLat == null ||
+      Number.isNaN(shift.clockInLat) ||
+      shift.clockInLng == null ||
+      Number.isNaN(shift.clockInLng)
+    ) {
+      return null;
+    }
+    return `https://www.google.com/maps?q=${shift.clockInLat},${shift.clockInLng}`;
+  }
+
+  // ----- data loading -----
+
+  async function loadData() {
     try {
+      setLoading(true);
       setError(null);
-      const res = await fetch("/api/admin/shifts");
-      if (!res.ok) throw new Error("Failed to load shifts");
-      const data = await res.json();
-      setShifts(data);
-    } catch (err) {
+
+      const [shiftsRes, employeesRes, locationsRes] = await Promise.all([
+        fetch("/api/shifts"),
+        fetch("/api/admin/employees"),
+        fetch("/api/locations"),
+      ]);
+
+      if (!shiftsRes.ok) throw new Error("Failed to load shifts");
+      if (!employeesRes.ok) throw new Error("Failed to load employees");
+      if (!locationsRes.ok) throw new Error("Failed to load locations");
+
+      const shiftsData = (await shiftsRes.json()) as ApiShiftResponse;
+      const employeesData = (await employeesRes.json()) as any[];
+      const locationsData = (await locationsRes.json()) as any[];
+
+      setShifts(shiftsData);
+      setEmployees(
+        employeesData.map((e) => ({
+          id: e.id,
+          name: e.name,
+          employeeCode: e.employeeCode,
+        }))
+      );
+      setLocations(
+        locationsData.map((l) => ({
+          id: l.id,
+          name: l.name,
+        }))
+      );
+    } catch (err: any) {
       console.error(err);
-      setError("Failed to load shifts");
+      setError(err.message ?? "Failed to load data");
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
-    async function loadAll() {
-      setLoading(true);
-      try {
-        const [shiftRes, empRes, locRes] = await Promise.all([
-          fetch("/api/admin/shifts"),
-          fetch("/api/admin/employees"),
-          fetch("/api/admin/locations"),
-        ]);
-
-        if (!shiftRes.ok) throw new Error("Failed to load shifts");
-        if (!empRes.ok) throw new Error("Failed to load employees");
-        if (!locRes.ok) throw new Error("Failed to load locations");
-
-        const [shiftData, empData, locData] = await Promise.all([
-          shiftRes.json(),
-          empRes.json(),
-          locRes.json(),
-        ]);
-
-        setShifts(shiftData);
-        setEmployees(empData);
-        setLocations(locData);
-      } catch (err) {
-        console.error(err);
-        setError("Failed to load data");
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    loadAll();
+    loadData();
   }, []);
 
-  const filteredShifts = useMemo(
-    () =>
-      shifts.filter((s: Shift) => {
-        const empName = s.user?.name?.toLowerCase() ?? "";
-        const empCode = s.user?.employeeCode?.toLowerCase() ?? "";
-        const locName = s.location?.name?.toLowerCase() ?? "";
-        const adhocName = s.adhocLocationName?.toLowerCase() ?? "";
+  // ----- filtering -----
 
-        if (
-          employeeFilter &&
-          !empName.includes(employeeFilter.toLowerCase()) &&
-          !empCode.includes(employeeFilter.toLowerCase())
-        ) {
-          return false;
-        }
+  const filteredShifts = useMemo(() => {
+    return shifts.filter((s) => {
+      if (
+        filterEmployee &&
+        !(
+          s.user.name.toLowerCase().includes(filterEmployee.toLowerCase()) ||
+          (s.user.employeeCode ?? "")
+            .toLowerCase()
+            .includes(filterEmployee.toLowerCase())
+        )
+      ) {
+        return false;
+      }
 
-        if (
-          locationFilter &&
-          !locName.includes(locationFilter.toLowerCase()) &&
-          !adhocName.includes(locationFilter.toLowerCase())
-        ) {
-          return false;
-        }
+      if (
+        filterLocation &&
+        !(s.location?.name ?? "")
+          .toLowerCase()
+          .includes(filterLocation.toLowerCase())
+      ) {
+        return false;
+      }
 
-        if (showAdhocOnly && !s.isAdhoc) return false;
+      if (showAdhocOnly && !isAdhocShift(s)) {
+        return false;
+      }
 
-        return true;
-      }),
-    [shifts, employeeFilter, locationFilter, showAdhocOnly]
-  );
+      return true;
+    });
+  }, [shifts, filterEmployee, filterLocation, showAdhocOnly]);
 
-  function resetForm() {
-    setEditingShiftId(null);
+  // ----- form helpers -----
+
+  function openCreateModal() {
+    setEditingShift(null);
+    setActionError(null);
     setFormEmployeeId("");
     setFormLocationId("");
     setFormClockIn("");
     setFormClockOut("");
-    setFormError(null);
+    setCreateModalOpen(true);
   }
 
-  function openCreateForm() {
-    resetForm();
-    setFormOpen(true);
-  }
-
-  function openEditForm(shift: Shift) {
-    setEditingShiftId(shift.id);
-    setFormEmployeeId(shift.user?.id ?? "");
-    setFormLocationId(shift.location?.id ?? "");
-    setFormClockIn(toLocalInputValue(shift.clockIn));
-    setFormClockOut(toLocalInputValue(shift.clockOut));
-    setFormError(null);
-    setFormOpen(true);
-  }
-
-  async function handleSaveShift(e: React.FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-
-    if (!formEmployeeId || !formClockIn) {
-      setFormError("Employee and clock-in are required.");
-      return;
-    }
-
-    const payload: any = {
-      userId: formEmployeeId,
-      locationId: formLocationId || null,
-      clockIn: new Date(formClockIn).toISOString(),
-      clockOut: formClockOut ? new Date(formClockOut).toISOString() : null,
+  function openEditModal(shift: Shift) {
+    setEditingShift(shift);
+    setActionError(null);
+    setFormEmployeeId(shift.user.id);
+    setFormLocationId(shift.locationId ?? "");
+    // convert to datetime-local format (YYYY-MM-DDTHH:mm)
+    const toLocalInput = (iso: string | null) => {
+      if (!iso) return "";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "";
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const year = d.getFullYear();
+      const month = pad(d.getMonth() + 1);
+      const day = pad(d.getDate());
+      const hours = pad(d.getHours());
+      const mins = pad(d.getMinutes());
+      return `${year}-${month}-${day}T${hours}:${mins}`;
     };
 
-    setFormSaving(true);
-    try {
-      let res: Response;
+    setFormClockIn(toLocalInput(shift.clockIn));
+    setFormClockOut(toLocalInput(shift.clockOut));
+    setCreateModalOpen(true);
+  }
 
-      if (editingShiftId) {
-        res = await fetch(`/api/admin/shifts/${editingShiftId}`, {
+  function closeModal() {
+    setCreateModalOpen(false);
+    setEditingShift(null);
+    setActionError(null);
+  }
+
+  // ----- create / update / delete -----
+
+  async function handleSaveShift() {
+    try {
+      setActionLoading(true);
+      setActionError(null);
+
+      if (!formEmployeeId || !formClockIn) {
+        setActionError("employeeId and clockIn are required");
+        return;
+      }
+
+      const payload: any = {
+        employeeId: formEmployeeId,
+        locationId: formLocationId || null,
+        clockIn: formClockIn ? new Date(formClockIn).toISOString() : null,
+        clockOut: formClockOut ? new Date(formClockOut).toISOString() : null,
+      };
+
+      let res: Response;
+      if (editingShift) {
+        // update
+        res = await fetch(`/api/shifts/${editingShift.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
       } else {
-        res = await fetch("/api/admin/shifts", {
+        // create
+        res = await fetch("/api/shifts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -183,18 +245,17 @@ export default function AdminShiftsPage() {
       }
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to save shift");
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to save shift");
       }
 
-      await fetchShifts();
-      setFormOpen(false);
-      resetForm();
+      await loadData();
+      closeModal();
     } catch (err: any) {
       console.error(err);
-      setFormError(err.message || "Failed to save shift");
+      setActionError(err.message ?? "Failed to save shift");
     } finally {
-      setFormSaving(false);
+      setActionLoading(false);
     }
   }
 
@@ -202,318 +263,169 @@ export default function AdminShiftsPage() {
     if (!window.confirm("Delete this shift? This cannot be undone.")) return;
 
     try {
-      const res = await fetch(`/api/admin/shifts/${id}`, {
-        method: "DELETE",
-      });
+      setActionLoading(true);
+      setActionError(null);
 
+      const res = await fetch(`/api/shifts/${id}`, { method: "DELETE" });
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to delete shift");
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || "Failed to delete shift");
       }
 
-      await fetchShifts();
-    } catch (err) {
+      setShifts((prev) => prev.filter((s) => s.id !== id));
+    } catch (err: any) {
       console.error(err);
-      alert("Failed to delete shift. Check console/logs for details.");
+      setActionError(err.message ?? "Failed to delete shift");
+    } finally {
+      setActionLoading(false);
     }
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Header row */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Shifts</h1>
-          <p className="text-sm text-gray-500">
-            Review and manage clock-in / clock-out activity.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => fetchShifts()}
-            className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={openCreateForm}
-            className="rounded bg-black px-3 py-1.5 text-sm font-semibold text-white hover:bg-gray-900"
-          >
-            New manual shift
-          </button>
-        </div>
-      </div>
+  // ----- render -----
 
-      {/* Manual shift form */}
-      {formOpen && (
-        <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-gray-800">
-              {editingShiftId ? "Edit shift" : "Create manual shift"}
-            </h2>
+  return (
+    <main className="min-h-screen bg-gray-50 px-6 py-8">
+      <div className="mx-auto max-w-6xl bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Shifts</h1>
+            <p className="text-sm text-gray-500">
+              Review and audit clock-in / clock-out activity.
+            </p>
+          </div>
+          <div className="flex gap-3">
             <button
-              type="button"
-              onClick={() => {
-                setFormOpen(false);
-                resetForm();
-              }}
-              className="text-xs text-gray-500 hover:text-gray-800"
+              onClick={loadData}
+              className="px-3 py-1.5 rounded border text-sm border-gray-300 hover:bg-gray-50"
             >
-              Close
+              Refresh
+            </button>
+            <button
+              onClick={openCreateModal}
+              className="px-4 py-1.5 rounded bg-black text-white text-sm font-medium hover:bg-gray-900"
+            >
+              New shift
             </button>
           </div>
-
-          {formError && (
-            <div className="rounded bg-red-50 px-3 py-2 text-xs text-red-700">
-              {formError}
-            </div>
-          )}
-
-          <form
-            onSubmit={handleSaveShift}
-            className="grid grid-cols-1 gap-3 md:grid-cols-5 md:items-end"
-          >
-            <div className="md:col-span-2">
-              <label className="mb-1 block text-xs font-medium text-gray-700">
-                Employee
-              </label>
-              <select
-                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
-                value={formEmployeeId}
-                onChange={(e) => setFormEmployeeId(e.target.value)}
-                required
-              >
-                <option value="">Select employee…</option>
-                {employees.map((emp: Employee) => (
-                  <option key={emp.id} value={emp.id}>
-                    {emp.name}
-                    {emp.employeeCode ? ` (${emp.employeeCode})` : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">
-                Location
-              </label>
-              <select
-                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
-                value={formLocationId}
-                onChange={(e) => setFormLocationId(e.target.value)}
-              >
-                <option value="">None / ADHOC</option>
-                {locations.map((loc: Location) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">
-                Clock in
-              </label>
-              <input
-                type="datetime-local"
-                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
-                value={formClockIn}
-                onChange={(e) => setFormClockIn(e.target.value)}
-                required
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">
-                Clock out
-              </label>
-              <input
-                type="datetime-local"
-                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
-                value={formClockOut}
-                onChange={(e) => setFormClockOut(e.target.value)}
-              />
-            </div>
-
-            <div className="md:col-span-5 flex justify-end gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setFormOpen(false);
-                  resetForm();
-                }}
-                className="rounded border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={formSaving}
-                className="rounded bg-black px-4 py-1.5 text-xs font-semibold text-white hover:bg-gray-900 disabled:opacity-60"
-              >
-                {formSaving
-                  ? editingShiftId
-                    ? "Saving…"
-                    : "Creating…"
-                  : editingShiftId
-                  ? "Save changes"
-                  : "Create shift"}
-              </button>
-            </div>
-          </form>
         </div>
-      )}
 
-      {/* Filters */}
-      <div className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-1 flex-col gap-2 md:flex-row">
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-gray-700">
+        {/* Filters */}
+        <div className="flex flex-wrap gap-4 items-end mb-4">
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
               Filter by employee
             </label>
             <input
-              className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+              className="w-full border rounded-md px-2 py-1.5 text-sm"
               placeholder="Name or code"
-              value={employeeFilter}
-              onChange={(e) => setEmployeeFilter(e.target.value)}
+              value={filterEmployee}
+              onChange={(e) => setFilterEmployee(e.target.value)}
             />
           </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs font-medium text-gray-700">
+
+          <div className="flex-1 min-w-[200px]">
+            <label className="block text-xs font-medium text-gray-600 mb-1">
               Filter by location
             </label>
             <input
-              className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+              className="w-full border rounded-md px-2 py-1.5 text-sm"
               placeholder="Location name"
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
+              value={filterLocation}
+              onChange={(e) => setFilterLocation(e.target.value)}
             />
           </div>
-        </div>
-        <label className="mt-1 inline-flex items-center gap-2 text-xs text-gray-700 md:mt-5">
-          <input
-            type="checkbox"
-            className="h-4 w-4 rounded border-gray-300"
-            checked={showAdhocOnly}
-            onChange={(e) => setShowAdhocOnly(e.target.checked)}
-          />
-          Show ADHOC only
-        </label>
-      </div>
 
-      {/* Error / loading */}
-      {error && (
-        <div className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+          <label className="inline-flex items-center gap-2 text-xs text-gray-700">
+            <input
+              type="checkbox"
+              className="rounded border-gray-300"
+              checked={showAdhocOnly}
+              onChange={(e) => setShowAdhocOnly(e.target.checked)}
+            />
+            Show ADHOC only
+          </label>
         </div>
-      )}
-      {loading && (
-        <div className="text-sm text-gray-500">Loading shifts…</div>
-      )}
 
-      {/* Table */}
-      {!loading && (
-        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white shadow-sm">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
+        {error && (
+          <div className="mb-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Table */}
+        <div className="overflow-x-auto border border-gray-200 rounded-lg">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-100 text-xs uppercase text-gray-500">
               <tr>
-                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Employee
-                </th>
-                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Location
-                </th>
-                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Clock in
-                </th>
-                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Clock out
-                </th>
-                <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Hours
-                </th>
-                <th className="px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  ADHOC
-                </th>
-                <th className="px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Map
-                </th>
-                <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Actions
-                </th>
+                <th className="px-3 py-2 text-left">Employee</th>
+                <th className="px-3 py-2 text-left">Location</th>
+                <th className="px-3 py-2 text-left">Clock in</th>
+                <th className="px-3 py-2 text-left">Clock out</th>
+                <th className="px-3 py-2 text-left">Hours</th>
+                <th className="px-3 py-2 text-left">ADHOC</th>
+                <th className="px-3 py-2 text-left">Map</th>
+                <th className="px-3 py-2 text-left">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredShifts.length === 0 ? (
+            <tbody>
+              {loading ? (
                 <tr>
                   <td
                     colSpan={8}
-                    className="px-4 py-6 text-center text-sm text-gray-500"
+                    className="px-3 py-8 text-center text-gray-500"
                   >
-                    No shifts match the current filters.
+                    Loading shifts…
+                  </td>
+                </tr>
+              ) : filteredShifts.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={8}
+                    className="px-3 py-8 text-center text-gray-500"
+                  >
+                    No shifts found for the current filters.
                   </td>
                 </tr>
               ) : (
-                filteredShifts.map((s: Shift) => {
-                  const name = s.user?.name ?? "—";
-                  const code = s.user?.employeeCode
-                    ? ` (${s.user.employeeCode})`
-                    : "";
-                  const locationLabel =
-                    s.location?.name ??
-                    s.adhocLocationName ??
-                    "Adhoc Job Site";
-
-                  let hoursDisplay: string | number = "—";
-                  if (typeof s.hours === "number") {
-                    hoursDisplay = s.hours.toFixed(2);
-                  } else if (s.hours != null) {
-                    hoursDisplay = s.hours;
-                  }
-
-                  const hasMap =
-                    s.clockInLat != null && s.clockInLng != null;
-
+                filteredShifts.map((s) => {
+                  const adhoc = isAdhocShift(s);
+                  const mapUrl = mapUrlForShift(s);
                   return (
-                    <tr key={s.id}>
-                      <td className="px-4 py-2">
+                    <tr key={s.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2 align-top">
                         <div className="font-medium text-gray-900">
-                          {name}
+                          {s.user.name}
                         </div>
-                        {code && (
-                          <div className="text-xs text-gray-500">
-                            {code}
-                          </div>
-                        )}
+                        <div className="text-xs text-gray-500">
+                          {s.user.employeeCode ?? "—"}
+                        </div>
                       </td>
-                      <td className="px-4 py-2 text-gray-900">
-                        {locationLabel}
+                      <td className="px-3 py-2 align-top">
+                        {s.location?.name ?? "—"}
                       </td>
-                      <td className="px-4 py-2 text-gray-700">
-                        {formatDate(s.clockIn)}
+                      <td className="px-3 py-2 align-top">
+                        {formatDateTimeLocal(s.clockIn)}
                       </td>
-                      <td className="px-4 py-2 text-gray-700">
-                        {formatDate(s.clockOut)}
+                      <td className="px-3 py-2 align-top">
+                        {formatDateTimeLocal(s.clockOut)}
                       </td>
-                      <td className="px-4 py-2 text-right text-gray-900">
-                        {hoursDisplay}
+                      <td className="px-3 py-2 align-top">
+                        {computeHours(s)}
                       </td>
-                      <td className="px-4 py-2 text-center">
-                        {s.isAdhoc ? (
-                          <span className="inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800">
+                      <td className="px-3 py-2 align-top">
+                        {adhoc ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                             ADHOC
                           </span>
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-center">
-                        {hasMap ? (
+                      <td className="px-3 py-2 align-top">
+                        {mapUrl ? (
                           <a
-                            href={`https://www.google.com/maps?q=${s.clockInLat},${s.clockInLng}`}
+                            href={mapUrl}
                             target="_blank"
                             rel="noreferrer"
                             className="text-xs font-medium text-blue-600 hover:underline"
@@ -524,23 +436,19 @@ export default function AdminShiftsPage() {
                           <span className="text-gray-300">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-2 text-right">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => openEditForm(s)}
-                            className="text-xs font-medium text-gray-700 hover:text-gray-900"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteShift(s.id)}
-                            className="text-xs font-medium text-red-600 hover:text-red-800"
-                          >
-                            Delete
-                          </button>
-                        </div>
+                      <td className="px-3 py-2 align-top">
+                        <button
+                          onClick={() => openEditModal(s)}
+                          className="text-xs text-blue-600 hover:underline mr-3"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteShift(s.id)}
+                          className="text-xs text-red-600 hover:underline"
+                        >
+                          Delete
+                        </button>
                       </td>
                     </tr>
                   );
@@ -549,7 +457,122 @@ export default function AdminShiftsPage() {
             </tbody>
           </table>
         </div>
+
+        {actionError && (
+          <div className="mt-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+            {actionError}
+          </div>
+        )}
+      </div>
+
+      {/* Create / Edit modal */}
+      {createModalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-lg max-w-3xl w-full mx-4 p-6 relative">
+            <button
+              className="absolute top-3 right-3 text-sm text-gray-500 hover:text-gray-800"
+              onClick={closeModal}
+            >
+              ✕
+            </button>
+
+            <h2 className="text-lg font-semibold mb-4">
+              {editingShift ? "Edit shift" : "Create manual shift"}
+            </h2>
+
+            {actionError && (
+              <div className="mb-4 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                {actionError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Employee
+                </label>
+                <select
+                  className="w-full border rounded-md px-2 py-1.5 text-sm"
+                  value={formEmployeeId}
+                  onChange={(e) => setFormEmployeeId(e.target.value)}
+                >
+                  <option value="">Select employee</option>
+                  {employees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
+                      {e.employeeCode ? ` (${e.employeeCode})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Location
+                </label>
+                <select
+                  className="w-full border rounded-md px-2 py-1.5 text-sm"
+                  value={formLocationId}
+                  onChange={(e) => setFormLocationId(e.target.value)}
+                >
+                  <option value="">(none)</option>
+                  {locations.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Clock in
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm"
+                  value={formClockIn}
+                  onChange={(e) => setFormClockIn(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  Clock out
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full border rounded-md px-2 py-1.5 text-sm"
+                  value={formClockOut}
+                  onChange={(e) => setFormClockOut(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={closeModal}
+                className="px-4 py-1.5 rounded border border-gray-300 text-sm hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveShift}
+                disabled={actionLoading}
+                className="px-5 py-1.5 rounded bg-black text-white text-sm font-medium disabled:opacity-60"
+              >
+                {actionLoading
+                  ? editingShift
+                    ? "Saving…"
+                    : "Creating…"
+                  : editingShift
+                  ? "Save changes"
+                  : "Create shift"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-    </div>
+    </main>
   );
 }
