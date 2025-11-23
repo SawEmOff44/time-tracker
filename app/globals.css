@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Leaflet map styles */
+@import "leaflet/dist/leaflet.css";
+
+/* Your global styles */
 html,
 body {
   margin: 0;

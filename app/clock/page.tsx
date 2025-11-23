@@ -1,81 +1,98 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
-import { formatDateTimeLocal } from "@/lib/datetime";
 
 type ApiResponse = {
   status?: "clocked_in" | "clocked_out";
   message?: string;
   shift?: {
-    id: string;
-    clockIn: string;
-    clockOut: string | null;
-    location?: {
-      name: string;
-    } | null;
-  };
-  error?: string;
-  totalHoursThisPeriod?: number;
+    clockIn?: string | null;
+    clockOut?: string | null;
+  } | null;
   locationName?: string | null;
+  totalHoursThisPeriod?: number;
+  error?: string;
 };
+
+function formatTime(date: Date | null) {
+  if (!date) return "—";
+  return date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatDate(date: Date | null) {
+  if (!date) return "—";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function formatElapsed(seconds: number) {
+  if (seconds <= 0) return "00:00:00";
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+}
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
-
   const [loading, setLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const [gpsStatus, setGpsStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  const [currentShiftStart, setCurrentShiftStart] =
-    useState<Date | null>(null);
-  const [lastShiftClockIn, setLastShiftClockIn] =
-    useState<Date | null>(null);
-  const [lastShiftClockOut, setLastShiftClockOut] =
-    useState<Date | null>(null);
-  const [totalHoursThisPeriod, setTotalHoursThisPeriod] =
-    useState<number | null>(null);
+  const [status, setStatus] = useState<"idle" | "clocked_in" | "clocked_out">(
+    "idle"
+  );
   const [locationName, setLocationName] = useState<string | null>(null);
+  const [totalHoursThisPeriod, setTotalHoursThisPeriod] = useState<number | null>(
+    null
+  );
 
-  // for live timer
-  const [now, setNow] = useState<Date>(new Date());
+  const [lastClockIn, setLastClockIn] = useState<Date | null>(null);
+  const [lastClockOut, setLastClockOut] = useState<Date | null>(null);
 
+  const [activeShiftStart, setActiveShiftStart] = useState<Date | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  // Timer for active shift
   useEffect(() => {
-    if (!currentShiftStart) return;
+    if (!activeShiftStart) {
+      setElapsedSeconds(0);
+      return;
+    }
 
-    const id = setInterval(() => {
-      setNow(new Date());
-    }, 1000);
+    const tick = () => {
+      const now = new Date();
+      const diff = Math.floor(
+        (now.getTime() - activeShiftStart.getTime()) / 1000
+      );
+      setElapsedSeconds(diff > 0 ? diff : 0);
+    };
 
-    return () => clearInterval(id);
-  }, [currentShiftStart]);
-
-  const isSubmitDisabled =
-    loading || !employeeCode || !pin;
-
-  function formatShiftDuration(start: Date | null, end: Date): string {
-    if (!start) return "—";
-    const ms = end.getTime() - start.getTime();
-    if (ms <= 0) return "—";
-    const totalSeconds = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
-  }
+    tick(); // initialize immediately
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [activeShiftStart]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setErrorMessage(null);
-    setStatusMessage(null);
+    setError(null);
+    setSuccessMessage(null);
     setGpsStatus(null);
 
     if (!navigator.geolocation) {
-      setErrorMessage("This device does not support GPS.");
+      setError("This device does not support GPS location.");
       setLoading(false);
       return;
     }
@@ -86,7 +103,7 @@ export default function ClockPage() {
         const lng = pos.coords.longitude;
 
         setGpsStatus(
-          `GPS lock acquired (lat ${lat.toFixed(5)}, lng ${lng.toFixed(5)})`
+          `Got GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`
         );
 
         try {
@@ -104,80 +121,61 @@ export default function ClockPage() {
           const data = (await res.json()) as ApiResponse;
 
           if (!res.ok) {
-            setErrorMessage(
-              data.error || "Clock-in/out failed. Please try again."
-            );
-            // if error, clear shift timer
-            setCurrentShiftStart(null);
+            setError(data.error || "Unknown error clocking in/out.");
+            setStatus("idle");
+            setActiveShiftStart(null);
             return;
           }
 
-          // Successful response
-          setStatusMessage(
-            data.message ||
-              (data.status === "clocked_in"
-                ? "You are now clocked in."
-                : "You are now clocked out.")
-          );
+          // Success
+          if (data.status === "clocked_in" || data.status === "clocked_out") {
+            setStatus(data.status);
+          } else {
+            setStatus("idle");
+          }
+
+          setSuccessMessage(data.message || null);
+          setLocationName(data.locationName ?? null);
 
           if (typeof data.totalHoursThisPeriod === "number") {
             setTotalHoursThisPeriod(data.totalHoursThisPeriod);
           }
 
-          if (data.locationName) {
-            setLocationName(data.locationName);
-          } else if (data.shift?.location?.name) {
-            setLocationName(data.shift.location.name);
-          } else {
-            setLocationName(null);
-          }
+          // Handle shift times
+          const clockInIso = data.shift?.clockIn ?? null;
+          const clockOutIso = data.shift?.clockOut ?? null;
 
-          if (data.shift?.clockIn) {
-            const clockInDate = new Date(data.shift.clockIn);
-            setLastShiftClockIn(clockInDate);
-            if (data.shift.clockOut) {
-              const clockOutDate = new Date(data.shift.clockOut);
-              setLastShiftClockOut(clockOutDate);
-            } else {
-              setLastShiftClockOut(null);
-            }
-          }
+          const clockInDate = clockInIso ? new Date(clockInIso) : null;
+          const clockOutDate = clockOutIso ? new Date(clockOutIso) : null;
 
-          if (data.status === "clocked_in" && data.shift?.clockIn) {
-            setCurrentShiftStart(new Date(data.shift.clockIn));
+          setLastClockIn(clockInDate);
+          setLastClockOut(clockOutDate);
+
+          if (data.status === "clocked_in" && clockInDate) {
+            setActiveShiftStart(clockInDate);
           } else {
-            // clocked out or unknown -> stop timer
-            setCurrentShiftStart(null);
+            setActiveShiftStart(null);
           }
-        } catch (err) {
-          console.error(err);
-          setErrorMessage(
-            "Network error contacting the server. Please try again."
-          );
-          setCurrentShiftStart(null);
+        } catch {
+          setError("Network error contacting the server.");
         } finally {
           setLoading(false);
         }
       },
       (geoErr) => {
-        console.error("GPS error:", geoErr);
-
         if (geoErr.code === geoErr.PERMISSION_DENIED) {
           setGpsStatus("Location permission denied.");
-          setErrorMessage(
-            "We need location permission to clock you in/out."
-          );
+          setError("We need GPS permission to clock you in/out.");
         } else if (geoErr.code === geoErr.POSITION_UNAVAILABLE) {
           setGpsStatus("Location unavailable.");
-          setErrorMessage("Could not determine your location.");
+          setError("Could not determine your location.");
         } else if (geoErr.code === geoErr.TIMEOUT) {
           setGpsStatus("Location request timed out.");
-          setErrorMessage("Location request timed out. Try again.");
+          setError("Location request timed out. Try again.");
         } else {
           setGpsStatus("Unknown GPS error.");
-          setErrorMessage("Unknown GPS error occurred.");
+          setError("Unknown GPS error occurred.");
         }
-
         setLoading(false);
       },
       {
@@ -188,146 +186,147 @@ export default function ClockPage() {
     );
   }
 
-  const runningShiftTime = currentShiftStart
-    ? formatShiftDuration(currentShiftStart, now)
-    : null;
+  const isSubmitDisabled = loading || !employeeCode || !pin;
+
+  const isClockedIn = status === "clocked_in";
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-5">
-        {/* Logo */}
-        <div className="w-full flex justify-center mb-1">
-          <Image
-            src="/rhinehart-logo.jpeg"
-            alt="Rhinehart Co. Logo"
-            width={220}
-            height={80}
-            className="object-contain"
-            priority
-          />
+    <main className="min-h-[calc(100vh-64px)] flex items-center justify-center bg-gray-50 px-4 py-6">
+      <div className="w-full max-w-md rounded-2xl bg-white shadow-md border border-gray-200 p-6 space-y-5">
+        {/* Title */}
+        <div className="text-center space-y-1">
+          <h1 className="text-xl font-semibold text-gray-900">
+            Clock In / Out
+          </h1>
+          <p className="text-xs text-gray-500">
+            GPS is required. Make sure location services are enabled.
+          </p>
         </div>
 
-        <h1 className="text-2xl font-bold text-center">
-          Clock In / Out
-        </h1>
-        <p className="text-sm text-gray-600 text-center">
-          GPS is required for clocking in/out.
-        </p>
+        {/* Status banner */}
+        {(isClockedIn || status === "clocked_out") && (
+          <div
+            className={`rounded-xl px-3 py-3 text-xs ${
+              isClockedIn
+                ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                : "bg-slate-50 border border-slate-200 text-slate-800"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wide">
+                {isClockedIn ? "Currently Clocked In" : "Clocked Out"}
+              </span>
+              <span
+                className={`inline-flex h-2 w-2 rounded-full ${
+                  isClockedIn ? "bg-emerald-500" : "bg-slate-400"
+                }`}
+              />
+            </div>
+            {successMessage && (
+              <p className="mt-1 text-sm font-medium">{successMessage}</p>
+            )}
+            {locationName && (
+              <p className="mt-0.5 text-[11px] text-gray-600">
+                Location: <span className="font-medium">{locationName}</span>
+              </p>
+            )}
+            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-600">
+              <div>
+                <div className="font-semibold text-gray-700">Last Clock In</div>
+                <div>{formatDate(lastClockIn)}</div>
+                <div>{formatTime(lastClockIn)}</div>
+              </div>
+              <div>
+                <div className="font-semibold text-gray-700">Last Clock Out</div>
+                <div>{formatDate(lastClockOut)}</div>
+                <div>{formatTime(lastClockOut)}</div>
+              </div>
+            </div>
+          </div>
+        )}
 
+        {/* Summary stats */}
+        <div className="grid grid-cols-2 gap-3 text-center text-xs">
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-gray-500">
+              Hours this week
+            </div>
+            <div className="mt-1 text-lg font-semibold text-gray-900">
+              {totalHoursThisPeriod != null
+                ? totalHoursThisPeriod.toFixed(2)
+                : "—"}
+            </div>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+            <div className="text-[11px] uppercase tracking-wide text-gray-500">
+              Current shift
+            </div>
+            <div className="mt-1 text-lg font-mono font-semibold text-gray-900">
+              {isClockedIn ? formatElapsed(elapsedSeconds) : "00:00:00"}
+            </div>
+          </div>
+        </div>
+
+        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Employee Code */}
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label className="block text-xs font-medium text-gray-700 mb-1">
               Employee Code
             </label>
             <input
-              className="border rounded px-2 py-2 w-full text-sm"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
               placeholder="e.g. ALI001"
               value={employeeCode}
-              onChange={(e) => setEmployeeCode(e.target.value)}
-              required
+              onChange={(e) => setEmployeeCode(e.target.value.toUpperCase())}
+              autoComplete="off"
             />
           </div>
 
           {/* PIN */}
           <div>
-            <label className="block text-sm font-medium mb-1">
+            <label className="block text-xs font-medium text-gray-700 mb-1">
               PIN
             </label>
             <input
               type="password"
-              className="border rounded px-2 py-2 w-full text-sm"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              required
+              autoComplete="off"
             />
           </div>
 
+          {/* Submit */}
           <button
             type="submit"
             disabled={isSubmitDisabled}
-            className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
+            className={`w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition ${
+              isSubmitDisabled
+                ? "bg-gray-400 cursor-not-allowed"
+                : isClockedIn
+                ? "bg-red-600 hover:bg-red-700"
+                : "bg-black hover:bg-gray-900"
+            }`}
           >
-            {loading ? "Checking location..." : "Clock In / Out"}
+            {loading
+              ? "Checking location..."
+              : isClockedIn
+              ? "Clock Out"
+              : "Clock In"}
           </button>
         </form>
 
-        {/* GPS Status */}
-        {gpsStatus && (
-          <div className="text-xs text-gray-700">
-            <strong>GPS:</strong> {gpsStatus}
-          </div>
-        )}
-
-        {/* Status + errors */}
-        {statusMessage && (
-          <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-800">
-            {statusMessage}
-            {locationName && (
-              <span className="block text-xs text-green-700 mt-1">
-                Location: {locationName}
-              </span>
-            )}
-          </div>
-        )}
-
-        {errorMessage && (
-          <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
-            {errorMessage}
-          </div>
-        )}
-
-        {/* Shift + hours summary */}
-        <div className="border rounded-md px-3 py-3 bg-gray-50 text-sm space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="font-medium">Current status</span>
-            <span
-              className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${
-                currentShiftStart
-                  ? "bg-green-100 text-green-800"
-                  : "bg-gray-200 text-gray-700"
-              }`}
-            >
-              {currentShiftStart ? "Clocked in" : "Clocked out"}
-            </span>
-          </div>
-
-          {currentShiftStart && (
-            <>
-              <div className="flex justify-between text-xs text-gray-700">
-                <span>Shift started</span>
-                <span>{formatDateTimeLocal(currentShiftStart)}</span>
-              </div>
-              <div className="flex justify-between text-xs text-gray-700">
-                <span>Time on this shift</span>
-                <span className="font-mono">
-                  {runningShiftTime ?? "—"}
-                </span>
-              </div>
-            </>
+        {/* GPS + Error */}
+        <div className="space-y-1 text-xs">
+          {gpsStatus && (
+            <div className="text-gray-500">
+              <span className="font-medium">GPS:</span> {gpsStatus}
+            </div>
           )}
-
-          <div className="flex justify-between text-xs text-gray-700 pt-1 border-t border-gray-200 mt-2">
-            <span>Hours this week</span>
-            <span className="font-semibold">
-              {totalHoursThisPeriod != null
-                ? `${totalHoursThisPeriod.toFixed(2)} h`
-                : "—"}
-            </span>
-          </div>
-
-          {lastShiftClockIn && (
-            <div className="mt-2 text-[11px] text-gray-500">
-              <div>
-                Last clock in:{" "}
-                {formatDateTimeLocal(lastShiftClockIn)}
-              </div>
-              {lastShiftClockOut && (
-                <div>
-                  Last clock out:{" "}
-                  {formatDateTimeLocal(lastShiftClockOut)}
-                </div>
-              )}
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+              {error}
             </div>
           )}
         </div>

@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+
+// IMPORTANT: dynamic import to avoid SSR breakage
+const LocationMap = dynamic(() => import("./LocationMap"), {
+  ssr: false,
+  loading: () => (
+    <div className="text-sm text-gray-500">Loading map…</div>
+  ),
+});
 
 type Location = {
   id: string;
@@ -9,383 +17,545 @@ type Location = {
   code: string;
   lat: number;
   lng: number;
-  radiusMeters: number;
+  radiusMeters: number | null;
   active: boolean;
-  createdAt: string;
-  updatedAt: string;
 };
 
-// Dynamically import “map” preview (client-side only)
-const Map = dynamic(() => import("./Map"), { ssr: false });
+type GeocodeResponse =
+  | { lat: number; lng: number }
+  | { error: string };
 
-export default function LocationsPage() {
+const DEFAULT_CENTER: [number, number] = [32.778, -96.795]; // Dallas-ish fallback
+
+export default function LocationsAdminPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  // Form fields
+  const [editingId, setEditingId] = useState<string | null>(null);
+
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
-  const [lat, setLat] = useState("");
-  const [lng, setLng] = useState("");
-  const [radiusMeters, setRadiusMeters] = useState("100");
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [radiusMeters, setRadiusMeters] = useState<number | null>(null);
   const [active, setActive] = useState(true);
 
-  // Address field just for geocoding
-  const [addressLookup, setAddressLookup] = useState("");
-  const [geocodeInfo, setGeocodeInfo] = useState<any>(null);
+  const [addressQuery, setAddressQuery] = useState("");
+  const [geocodeLoading, setGeocodeLoading] = useState(false);
+  const [geocodeError, setGeocodeError] = useState<string | null>(null);
 
-  // -------------------------------
-  // Load locations
-  // -------------------------------
-  async function loadLocations() {
-    try {
-      const res = await fetch("/api/admin/locations");
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to load locations");
-      }
-
-      setLocations(data);
-    } catch (err: any) {
-      setError(err.message || "Failed to load locations");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  // Load locations on mount
   useEffect(() => {
+    async function loadLocations() {
+      try {
+        setLoading(true);
+        const res = await fetch("/api/admin/locations");
+        if (!res.ok) {
+          throw new Error("Failed to load locations");
+        }
+        const data = (await res.json()) as Location[];
+        setLocations(data);
+      } catch (err) {
+        console.error(err);
+        setError("Failed to load locations.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     loadLocations();
   }, []);
 
-  // -------------------------------
-  // Geocode lookup (address → lat/lng)
-  // -------------------------------
-  async function handleGeocodeLookup() {
-    if (!addressLookup.trim()) {
-      setError("Enter a street address to look up coordinates.");
+  function resetForm() {
+    setEditingId(null);
+    setName("");
+    setCode("");
+    setLat(null);
+    setLng(null);
+    setRadiusMeters(null);
+    setActive(true);
+    setAddressQuery("");
+    setGeocodeError(null);
+  }
+
+  function startEdit(location: Location) {
+    setEditingId(location.id);
+    setName(location.name);
+    setCode(location.code);
+    setLat(location.lat);
+    setLng(location.lng);
+    setRadiusMeters(location.radiusMeters);
+    setActive(location.active);
+    setAddressQuery("");
+    setGeocodeError(null);
+  }
+
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setGeocodeError(null);
+
+    if (!name.trim() || !code.trim()) {
+      setError("Name and code are required.");
+      return;
+    }
+    if (lat == null || lng == null) {
+      setError("Latitude and longitude are required.");
       return;
     }
 
-    setError(null);
-    setGeocodeInfo(null);
-
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-          addressLookup
-        )}&format=json&limit=1`
-      );
-
-      const data = await res.json();
-      if (!Array.isArray(data) || data.length === 0) {
-        setError("No results found for that address. Try adding city + state.");
-        return;
-      }
-
-      const place = data[0];
-      setLat(place.lat);
-      setLng(place.lon);
-      setGeocodeInfo(place);
-    } catch (err) {
-      console.error("Geocode lookup failed:", err);
-      setError("Failed to look up address. Check your connection and try again.");
+    // Allow radius 0 (ADHOC marker), but must be >= 0
+    if (radiusMeters != null && radiusMeters < 0) {
+      setError("Radius must be zero or a positive number.");
+      return;
     }
-  }
-
-  // -------------------------------
-  // Create Location
-  // -------------------------------
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setError(null);
 
     try {
-      const parsedLat = parseFloat(lat);
-      const parsedLng = parseFloat(lng);
-      const parsedRadius = parseFloat(radiusMeters);
+      setSaving(true);
 
-      if (!name.trim() || !code.trim()) {
-        throw new Error("Name and code are required.");
+      const payload = {
+        name: name.trim(),
+        code: code.trim(),
+        lat,
+        lng,
+        radiusMeters: radiusMeters ?? 0,
+        active,
+      };
+
+      if (editingId) {
+        // UPDATE
+        const res = await fetch(`/api/admin/locations/${editingId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to update location.");
+        }
+
+        const updated = (await res.json()) as Location;
+        setLocations((prev) =>
+          prev.map((loc) => (loc.id === updated.id ? updated : loc))
+        );
+      } else {
+        // CREATE
+        const res = await fetch("/api/admin/locations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || "Failed to create location.");
+        }
+
+        const created = (await res.json()) as Location;
+        setLocations((prev) => [...prev, created]);
       }
-      if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLng)) {
-        throw new Error("Latitude and longitude must be valid numbers.");
-      }
 
-      // ALLOW 0m → unbounded site; only disallow negative
-      if (!Number.isFinite(parsedRadius) || parsedRadius < 0) {
-        throw new Error("Radius must be a non-negative number (0 or more).");
-      }
-
-      const res = await fetch("/api/admin/locations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          code: code.trim(),
-          lat: parsedLat,
-          lng: parsedLng,
-          radiusMeters: parsedRadius,
-          active,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "Failed to create location");
-      }
-
-      // Reset form
-      setName("");
-      setCode("");
-      setLat("");
-      setLng("");
-      setRadiusMeters("100");
-      setActive(true);
-      setAddressLookup("");
-      setGeocodeInfo(null);
-
-      await loadLocations();
+      resetForm();
     } catch (err: any) {
-      setError(err.message || "Failed to create location.");
+      console.error(err);
+      setError(err.message || "Error saving location.");
     } finally {
       setSaving(false);
     }
   }
 
-  // -------------------------------
-  // Delete Location
-  // -------------------------------
   async function handleDelete(id: string) {
-    const loc = locations.find((l) => l.id === id);
-    const label = loc ? `${loc.name} (${loc.code})` : id;
-
-    const ok = window.confirm(
-      `Delete location "${label}"?\n\nIf this location has shifts, deletion may fail.`
-    );
-    if (!ok) return;
-
-    setError(null);
-    setDeletingId(id);
+    if (!confirm("Delete this location? This cannot be undone.")) return;
 
     try {
       const res = await fetch(`/api/admin/locations/${id}`, {
         method: "DELETE",
       });
-      const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || (data && data.error)) {
-        throw new Error(
-          data.error ||
-            "Failed to delete location. It may have existing shifts."
-        );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete location.");
       }
 
-      await loadLocations();
+      setLocations((prev) => prev.filter((loc) => loc.id !== id));
+
+      // If we were editing this one, reset the form
+      if (editingId === id) {
+        resetForm();
+      }
     } catch (err: any) {
-      setError(err.message || "Failed to delete location.");
-    } finally {
-      setDeletingId(null);
+      console.error(err);
+      setError(err.message || "Error deleting location.");
     }
   }
 
-  // -------------------------------
-  // Component UI
-  // -------------------------------
-  return (
-    <div className="max-w-5xl mx-auto py-10 space-y-10">
-      <h1 className="text-3xl font-bold">Job Sites / Locations</h1>
+  async function handleGeocode(e: React.FormEvent) {
+    e.preventDefault();
+    setGeocodeError(null);
 
-      {/* Error Message */}
+    const q = addressQuery.trim();
+    if (!q) {
+      setGeocodeError("Please enter an address or place.");
+      return;
+    }
+
+    try {
+      setGeocodeLoading(true);
+      const res = await fetch("/api/admin/locations/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q }),
+      });
+
+      const data = (await res.json()) as GeocodeResponse;
+
+      if (!res.ok || "error" in data) {
+        throw new Error(
+          (data as any).error || "Geocoding failed for that address."
+        );
+      }
+
+      setLat(data.lat);
+      setLng(data.lng);
+    } catch (err: any) {
+      console.error(err);
+      setGeocodeError(err.message || "Could not find coordinates.");
+    } finally {
+      setGeocodeLoading(false);
+    }
+  }
+
+  // Decide what coords to show on map
+  const mapLat = lat ?? DEFAULT_CENTER[0];
+  const mapLng = lng ?? DEFAULT_CENTER[1];
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold text-gray-900">Locations</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Manage job sites and GPS radiuses. Click the map to fine-tune
+          coordinates.
+        </p>
+      </div>
+
       {error && (
-        <div className="bg-red-100 text-red-800 px-4 py-2 rounded">
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
           {error}
         </div>
       )}
 
-      {/* FORM */}
-      <form
-        onSubmit={handleCreate}
-        className="bg-white rounded shadow p-6 grid grid-cols-1 md:grid-cols-2 gap-4"
-      >
-        <div className="col-span-2">
-          <h2 className="text-xl font-semibold mb-2">Create New Location</h2>
-        </div>
+      {/* Layout: form + map */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* FORM CARD */}
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">
+            {editingId ? "Edit location" : "Create location"}
+          </h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Name, code, and coordinates are required. Radius 0 marks this as an
+            ADHOC bucket.
+          </p>
 
-        {/* Name & Code */}
-        <div>
-          <label className="text-sm font-medium">Name</label>
-          <input
-            className="border px-2 py-1 rounded w-full"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Lake Shop"
-            required
-          />
-        </div>
+          <form onSubmit={handleSave} className="mt-4 space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Name
+              </label>
+              <input
+                className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Lake Shop"
+              />
+            </div>
 
-        <div>
-          <label className="text-sm font-medium">Internal Code</label>
-          <input
-            className="border px-2 py-1 rounded w-full"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="LAKESHOP"
-            required
-          />
-        </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Code
+              </label>
+              <input
+                className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="LAKESHOP"
+              />
+            </div>
 
-        {/* Address for lookup */}
-        <div className="md:col-span-2">
-          <label className="text-sm font-medium">
-            Street Address (for coordinate lookup)
-          </label>
-          <div className="flex gap-2 mt-1">
-            <input
-              className="border px-2 py-1 rounded w-full"
-              value={addressLookup}
-              onChange={(e) => setAddressLookup(e.target.value)}
-              placeholder="123 Main St, City, State"
-            />
-            <button
-              type="button"
-              onClick={handleGeocodeLookup}
-              className="px-3 py-1 bg-blue-600 text-white rounded whitespace-nowrap"
-            >
-              Lookup Coordinates
-            </button>
-          </div>
-          {geocodeInfo?.display_name && (
-            <p className="mt-1 text-xs text-gray-500">
-              Matched: {geocodeInfo.display_name}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700">
+                  Latitude
+                </label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                  value={lat ?? ""}
+                  onChange={(e) =>
+                    setLat(
+                      e.target.value === "" ? null : Number(e.target.value)
+                    )
+                  }
+                  step="0.000001"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-700">
+                  Longitude
+                </label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                  value={lng ?? ""}
+                  onChange={(e) =>
+                    setLng(
+                      e.target.value === "" ? null : Number(e.target.value)
+                    )
+                  }
+                  step="0.000001"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-700">
+                Radius (meters)
+              </label>
+              <input
+                type="number"
+                className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                value={radiusMeters ?? ""}
+                onChange={(e) =>
+                  setRadiusMeters(
+                    e.target.value === "" ? null : Number(e.target.value)
+                  )
+                }
+                min={0}
+              />
+              <p className="mt-1 text-[11px] text-gray-500">
+                Set to <strong>0</strong> to mark this as an ADHOC bucket
+                (no GPS radius check).
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                id="loc-active"
+                type="checkbox"
+                className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                checked={active}
+                onChange={(e) => setActive(e.target.checked)}
+              />
+              <label
+                htmlFor="loc-active"
+                className="text-xs font-medium text-gray-700"
+              >
+                Active job site
+              </label>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={saving}
+                className="inline-flex items-center rounded-md bg-gray-900 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-black disabled:opacity-60"
+              >
+                {saving
+                  ? editingId
+                    ? "Saving..."
+                    : "Creating..."
+                  : editingId
+                  ? "Save location"
+                  : "Create location"}
+              </button>
+              {editingId && (
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  className="text-xs text-gray-500 hover:text-gray-800"
+                >
+                  Cancel edit
+                </button>
+              )}
+            </div>
+          </form>
+
+          {/* Geocode helper */}
+          <div className="mt-6 border-t border-gray-100 pt-4">
+            <p className="text-xs font-semibold text-gray-700">
+              Coordinate lookup
             </p>
-          )}
+            <p className="mt-1 text-[11px] text-gray-500">
+              Paste an address or place name and we&apos;ll try to look up
+              coordinates. You can then fine-tune by clicking the map.
+            </p>
+
+            <form
+              onSubmit={handleGeocode}
+              className="mt-2 flex flex-col gap-2 sm:flex-row"
+            >
+              <input
+                className="flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                placeholder="123 Main St, City, State"
+                value={addressQuery}
+                onChange={(e) => setAddressQuery(e.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={geocodeLoading}
+                className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+              >
+                {geocodeLoading ? "Looking up..." : "Lookup"}
+              </button>
+            </form>
+
+            {geocodeError && (
+              <p className="mt-1 text-xs text-red-600">{geocodeError}</p>
+            )}
+          </div>
         </div>
 
-        {/* Lat/Lng */}
-        <div>
-          <label className="text-sm font-medium">Latitude</label>
-          <input
-            className="border px-2 py-1 rounded w-full"
-            value={lat}
-            onChange={(e) => setLat(e.target.value)}
-            required
-          />
-        </div>
+        {/* MAP CARD */}
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">
+                Location map
+              </h2>
+              <p className="text-[11px] text-gray-500">
+                Click anywhere on the map to set the coordinates. Radius circle
+                shows the GPS check area.
+              </p>
+            </div>
+          </div>
 
-        <div>
-          <label className="text-sm font-medium">Longitude</label>
-          <input
-            className="border px-2 py-1 rounded w-full"
-            value={lng}
-            onChange={(e) => setLng(e.target.value)}
-            required
-          />
+          <div className="h-80 w-full">
+            <LocationMap
+  lat={lat}
+  lng={lng}
+  radiusMeters={radiusMeters}
+  onChangeCoords={({ lat, lng }: { lat: number; lng: number }) => {
+    setLat(lat);
+    setLng(lng);
+  }}
+            />
+          </div>
         </div>
+      </div>
 
-        {/* Radius */}
-        <div>
-          <label className="text-sm font-medium">Radius (meters)</label>
-          <input
-            className="border px-2 py-1 rounded w-full"
-            value={radiusMeters}
-            onChange={(e) => setRadiusMeters(e.target.value)}
-            required
-          />
+      {/* EXISTING LOCATIONS TABLE */}
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
+          <h2 className="text-sm font-semibold text-gray-900">
+            Existing locations
+          </h2>
           <p className="text-xs text-gray-500">
-            Use <strong>0</strong> for ad-hoc / no geofence.
+            Click &quot;Edit&quot; to load into the form.
           </p>
         </div>
 
-        {/* Active */}
-        <div className="flex items-center gap-2">
-          <input
-            id="active"
-            type="checkbox"
-            checked={active}
-            onChange={(e) => setActive(e.target.checked)}
-          />
-          <label htmlFor="active" className="text-sm font-medium">
-            Active
-          </label>
-        </div>
-
-        {/* Submit */}
-        <button
-          disabled={saving}
-          className="col-span-2 py-2 bg-black text-white rounded disabled:opacity-50"
-        >
-          {saving ? "Saving..." : "Create Location"}
-        </button>
-
-        {/* MAP PREVIEW */}
-        <div className="col-span-2">
-          {lat && lng ? (
-            <div className="h-64 w-full border rounded overflow-hidden">
-              <Map
-                lat={parseFloat(lat)}
-                lng={parseFloat(lng)}
-                radius={parseFloat(radiusMeters)}
-              />
-            </div>
-          ) : (
-            <p className="text-gray-500 text-sm italic">
-              Enter coordinates or use the lookup to preview map.
-            </p>
-          )}
-        </div>
-      </form>
-
-      {/* EXISTING LOCATIONS LIST */}
-      <div>
-        <h2 className="text-xl font-semibold mb-3">Existing Locations</h2>
-
-        {loading ? (
-          <p>Loading...</p>
-        ) : (
-          <div className="space-y-2">
-            {locations.map((loc) => (
-              <div
-                key={loc.id}
-                className="p-4 bg-white shadow rounded flex justify-between items-center gap-4"
-              >
-                <div>
-                  <p className="font-bold">{loc.name}</p>
-                  <p className="text-sm text-gray-600">{loc.code}</p>
-                  <p className="text-xs text-gray-500">
-                    {loc.lat}, {loc.lng} — {loc.radiusMeters}m radius
-                    {loc.radiusMeters === 0 && " (ad-hoc / no geofence)"}
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-2 text-sm">
-                  <span
-                    className={
-                      loc.active ? "text-green-600" : "text-gray-500"
-                    }
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-100 text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Name
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Code
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Coords
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Radius
+                </th>
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Status
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white">
+              {loading && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-4 py-6 text-center text-sm text-gray-400"
                   >
-                    {loc.active ? "Active" : "Inactive"}
-                  </span>
-                  <button
-                    onClick={() => handleDelete(loc.id)}
-                    disabled={deletingId === loc.id}
-                    className="px-2 py-1 rounded border border-red-500 text-red-600 text-xs disabled:opacity-50"
+                    Loading locations…
+                  </td>
+                </tr>
+              )}
+
+              {!loading && locations.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-4 py-6 text-center text-sm text-gray-400"
                   >
-                    {deletingId === loc.id ? "Deleting..." : "Delete"}
-                  </button>
-                </div>
-              </div>
-            ))}
-            {locations.length === 0 && (
-              <p className="text-sm text-gray-500 italic">
-                No locations yet. Create one above.
-              </p>
-            )}
-          </div>
-        )}
+                    No locations yet. Create one on the left.
+                  </td>
+                </tr>
+              )}
+
+              {locations.map((loc) => {
+                const isAdhoc = loc.radiusMeters === 0;
+                return (
+                  <tr key={loc.id}>
+                    <td className="px-4 py-2 align-top text-gray-900">
+                      {loc.name}
+                    </td>
+                    <td className="px-4 py-2 align-top text-gray-700">
+                      {loc.code}
+                    </td>
+                    <td className="px-4 py-2 align-top text-gray-700 text-xs">
+                      {loc.lat.toFixed(6)}, {loc.lng.toFixed(6)}
+                    </td>
+                    <td className="px-4 py-2 align-top text-gray-700 text-xs">
+                      {loc.radiusMeters ?? 0} m{" "}
+                      {isAdhoc && (
+                        <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                          ADHOC
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 align-top">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                          loc.active
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-gray-100 text-gray-500"
+                        }`}
+                      >
+                        {loc.active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 align-top text-right text-xs">
+                      <button
+                        onClick={() => startEdit(loc)}
+                        className="mr-2 inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(loc.id)}
+                        className="inline-flex items-center rounded-md border border-red-200 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
