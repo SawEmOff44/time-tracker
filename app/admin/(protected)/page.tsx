@@ -1,196 +1,216 @@
-// app/admin/(protected)/page.tsx
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 function hoursBetween(clockIn: Date, clockOut: Date | null): number {
-  const end = clockOut ?? new Date();
-  const diffMs = end.getTime() - clockIn.getTime();
-  if (diffMs <= 0) return 0;
-  return diffMs / (1000 * 60 * 60);
+  if (!clockOut) return 0;
+  const ms = clockOut.getTime() - clockIn.getTime();
+  if (ms <= 0) return 0;
+  return ms / (1000 * 60 * 60);
 }
 
 export default async function AdminDashboardPage() {
-  try {
-    const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  // Basic counts
+  const [employeeCount, locationCount, totalShiftCount] = await Promise.all([
+    prisma.user.count({ where: { active: true, role: "WORKER" } }),
+    prisma.location.count({ where: { active: true } }),
+    prisma.shift.count(),
+  ]);
 
-    const [
-      totalEmployees,
-      activeEmployees,
-      totalLocations,
-      activeLocations,
-      totalShiftsLast7,
-      shiftsLast7,
-      recentShifts,
-    ] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { active: true } }),
-      prisma.location.count(),
-      prisma.location.count({ where: { active: true } }),
-      prisma.shift.count({
-        where: {
-          clockIn: { gte: sevenDaysAgo },
-        },
-      }),
-      prisma.shift.findMany({
-        where: {
-          clockIn: { gte: sevenDaysAgo },
-        },
-        select: {
-          clockIn: true,
-          clockOut: true,
-        },
-      }),
-      prisma.shift.findMany({
-        orderBy: {
-          clockIn: "desc",
-        },
-        take: 10,
-        include: {
-          user: true,
-          location: true,
-        },
-      }),
-    ]);
+  // Recent shifts with user + location
+  const recentShifts = (await prisma.shift.findMany({
+    orderBy: { clockIn: "desc" },
+    take: 10,
+    include: {
+      user: true,
+      location: true,
+    },
+  })) as any[]; // cast to any so we can safely use isAdhoc / adhocLocationName
 
-    const totalHoursLast7 = shiftsLast7
-      .map((s) => hoursBetween(s.clockIn, s.clockOut))
-      .reduce((acc, h) => acc + h, 0);
+  const totalHours = recentShifts.reduce((sum, s) => {
+    return sum + hoursBetween(s.clockIn, s.clockOut ?? null);
+  }, 0);
 
-    return (
-      <div className="space-y-8">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Admin Dashboard
-            </h1>
-            <p className="text-sm text-gray-600 mt-1">
-              Overview of workforce time tracking and activity.
-            </p>
+  // Simple ADHOC summary based on recent shifts only
+  const adhocCounts = new Map<string, { userName: string; count: number }>();
+
+  for (const s of recentShifts) {
+    if (!s.isAdhoc || !s.user) continue;
+    const id = s.user.id as string;
+    const current =
+      adhocCounts.get(id) ?? { userName: s.user.name ?? "Unknown", count: 0 };
+    current.count += 1;
+    adhocCounts.set(id, current);
+  }
+
+  const topAdhoc = Array.from(adhocCounts.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold text-gray-900">Dashboard</h1>
+        <p className="text-sm text-gray-500">
+          Overview of time tracking activity.
+        </p>
+      </div>
+
+      {/* Stat cards */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-medium uppercase text-gray-500">
+            Active employees
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-gray-900">
+            {employeeCount}
           </div>
         </div>
 
-        {/* Metric cards */}
-        <section className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-xs font-medium text-gray-500">
-              Active Employees
-            </div>
-            <div className="mt-2 flex items-baseline justify-between">
-              <div className="text-2xl font-semibold">{activeEmployees}</div>
-              <div className="text-xs text-gray-500">
-                {totalEmployees} total employees
-              </div>
-            </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-medium uppercase text-gray-500">
+            Active locations
           </div>
-
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-xs font-medium text-gray-500">
-              Active Locations
-            </div>
-            <div className="mt-2 flex items-baseline justify-between">
-              <div className="text-2xl font-semibold">{activeLocations}</div>
-              <div className="text-xs text-gray-500">
-                {totalLocations} total locations
-              </div>
-            </div>
+          <div className="mt-2 text-2xl font-semibold text-gray-900">
+            {locationCount}
           </div>
+        </div>
 
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-xs font-medium text-gray-500">
-              Shifts (last 7 days)
-            </div>
-            <div className="mt-2 flex items-baseline justify-between">
-              <div className="text-2xl font-semibold">{totalShiftsLast7}</div>
-              <div className="text-xs text-gray-500">clocked shifts</div>
-            </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-medium uppercase text-gray-500">
+            Total shifts
           </div>
-
-          <div className="rounded-xl border bg-white p-4 shadow-sm">
-            <div className="text-xs font-medium text-gray-500">
-              Hours (last 7 days)
-            </div>
-            <div className="mt-2 flex items-baseline justify-between">
-              <div className="text-2xl font-semibold">
-                {totalHoursLast7.toFixed(1)}
-              </div>
-              <div className="text-xs text-gray-500">approximate hours</div>
-            </div>
+          <div className="mt-2 text-2xl font-semibold text-gray-900">
+            {totalShiftCount}
           </div>
-        </section>
+        </div>
 
-        {/* Recent shifts */}
-        <section className="rounded-xl border bg-white p-4 shadow-sm">
-          <h2 className="text-sm font-semibold mb-3">Recent Shifts</h2>
-          {recentShifts.length === 0 ? (
-            <p className="text-xs text-gray-500">No shifts recorded yet.</p>
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="text-xs font-medium uppercase text-gray-500">
+            Hours in last 10 shifts
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-gray-900">
+            {totalHours.toFixed(1)}
+          </div>
+        </div>
+      </div>
+
+      {/* ADHOC summary + notes */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 text-sm font-semibold text-gray-900">
+            ADHOC activity (recent)
+          </div>
+          {topAdhoc.length === 0 ? (
+            <p className="text-xs text-gray-500">
+              No ADHOC shifts in the last 10 records.
+            </p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-xs">
-                <thead>
-                  <tr className="border-b text-gray-500">
-                    <th className="text-left py-1 pr-4 font-medium">
-                      Employee
-                    </th>
-                    <th className="text-left py-1 pr-4 font-medium">
-                      Location
-                    </th>
-                    <th className="text-left py-1 pr-4 font-medium">
-                      Clock In
-                    </th>
-                    <th className="text-left py-1 pr-4 font-medium">
-                      Clock Out
-                    </th>
-                    <th className="text-right py-1 font-medium">Hours</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentShifts.map((s) => {
-                    const clockIn = new Date(s.clockIn);
-                    const clockOut = s.clockOut ? new Date(s.clockOut) : null;
-                    const hours = hoursBetween(clockIn, clockOut);
-
-                    return (
-                      <tr key={s.id} className="border-b last:border-0">
-                        <td className="py-1 pr-4">
-                          {s.user?.name ||
-                            s.user?.employeeCode ||
-                            "Unknown"}
-                        </td>
-                        <td className="py-1 pr-4">
-                          {s.location?.name || "ADHOC / Unknown"}
-                        </td>
-                        <td className="py-1 pr-4">
-                          {clockIn.toLocaleString()}
-                        </td>
-                        <td className="py-1 pr-4">
-                          {clockOut ? clockOut.toLocaleString() : "—"}
-                        </td>
-                        <td className="py-1 text-right">
-                          {hours.toFixed(2)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <ul className="space-y-1 text-xs text-gray-700">
+              {topAdhoc.map((item) => (
+                <li
+                  key={item.userName}
+                  className="flex items-center justify-between"
+                >
+                  <span>{item.userName}</span>
+                  <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800">
+                    {item.count} ADHOC shifts
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
-        </section>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="mb-2 text-sm font-semibold text-gray-900">Notes</div>
+          <p className="text-xs text-gray-500">
+            Use the tabs above to manage employees, locations, shifts, and
+            payroll exports.
+          </p>
+        </div>
       </div>
-    );
-  } catch (err) {
-    console.error("Error rendering admin dashboard:", err);
-    return (
-      <div className="space-y-4">
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Admin Dashboard
-        </h1>
-        <p className="text-sm text-red-600">
-          There was an error loading dashboard data. Other admin pages should
-          still work (Employees, Locations, Shifts, Payroll).
-        </p>
+
+      {/* Recent shifts table */}
+      <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-gray-900">
+            Recent shifts
+          </h2>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200 text-sm">
+            <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-3 py-2 text-left">Employee</th>
+                <th className="px-3 py-2 text-left">Location</th>
+                <th className="px-3 py-2 text-left">Clock in</th>
+                <th className="px-3 py-2 text-left">Clock out</th>
+                <th className="px-3 py-2 text-right">Hours</th>
+                <th className="px-3 py-2 text-center">ADHOC</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {recentShifts.map((s) => {
+                const label =
+                  s.location?.name ??
+                  s.adhocLocationName ??
+                  (s.isAdhoc ? "Adhoc Job Site" : "—");
+                const hrs = hoursBetween(
+                  s.clockIn as Date,
+                  (s.clockOut ?? null) as Date | null
+                );
+
+                return (
+                  <tr key={s.id}>
+                    <td className="px-3 py-2">
+                      <div className="text-gray-900">
+                        {s.user?.name ?? "—"}
+                      </div>
+                      {s.user?.employeeCode && (
+                        <div className="text-xs text-gray-500">
+                          {s.user.employeeCode}
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">{label}</td>
+                    <td className="px-3 py-2 text-gray-700">
+                      {new Date(s.clockIn).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">
+                      {s.clockOut
+                        ? new Date(s.clockOut).toLocaleString()
+                        : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-900">
+                      {hrs ? hrs.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {s.isAdhoc ? (
+                        <span className="inline-flex rounded-full bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800">
+                          ADHOC
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {recentShifts.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    className="px-3 py-4 text-center text-sm text-gray-500"
+                  >
+                    No shifts yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    );
-  }
+    </div>
+  );
 }

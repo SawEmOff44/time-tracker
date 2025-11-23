@@ -2,11 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Global base styles */
 html,
 body {
   margin: 0;
   padding: 0;
-  background-color: #ffffff; /* ← back to white */
-  min-height: 100%;
+  background-color: #ffffff;
 }

@@ -1,19 +1,16 @@
 "use client";
 
-import { useState, FormEvent } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
+import { useState } from "react";
 
 export default function AdminLoginPage() {
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
     setLoading(true);
+    setError(null);
 
     try {
       const res = await fetch("/api/admin/login", {
@@ -24,67 +21,54 @@ export default function AdminLoginPage() {
 
       const data = await res.json().catch(() => ({}));
 
-      if (!res.ok || data.error) {
+      if (!res.ok) {
         setError(data.error || "Invalid password");
       } else {
-        router.push("/admin");
+        window.location.href = "/admin";
       }
     } catch {
-      setError("Network error contacting server.");
+      setError("Network error");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-md bg-white shadow-md rounded-lg p-6 space-y-4">
-        {/* Logo */}
-        <div className="w-full flex justify-center mb-2">
-          <Image
-            src="/rhinehart-logo.jpeg"
-            alt="Rhinehart Co. Logo"
-            width={220}
-            height={80}
-            className="object-contain"
-            priority
-          />
-        </div>
-
-        <h1 className="text-2xl font-bold text-center">Admin Login</h1>
-        <p className="text-sm text-gray-600 text-center">
-          Enter the admin password to access the dashboard.
+    <div className="flex min-h-[60vh] items-center justify-center">
+      <div className="w-full max-w-sm rounded-lg bg-white p-6 shadow-sm">
+        <h1 className="mb-2 text-lg font-semibold text-gray-900">
+          Admin login
+        </h1>
+        <p className="mb-4 text-xs text-gray-500">
+          Enter the admin password to access the control panel.
         </p>
-
         {error && (
-          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+          <div className="mb-3 rounded bg-red-50 px-3 py-2 text-xs text-red-700">
             {error}
           </div>
         )}
-
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="block text-sm font-medium mb-1">
-              Admin Password
+            <label className="mb-1 block text-xs font-medium text-gray-700">
+              Admin password
             </label>
             <input
               type="password"
-              className="border rounded px-2 py-1 w-full"
+              className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
             />
           </div>
-
           <button
             type="submit"
-            disabled={loading}
-            className="w-full py-2 rounded bg-black text-white font-semibold disabled:opacity-60"
+            disabled={loading || !password}
+            className="w-full rounded bg-black py-2 text-sm font-semibold text-white hover:bg-gray-900 disabled:opacity-60"
           >
-            {loading ? "Checking..." : "Log In"}
+            {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
       </div>
-    </main>
+    </div>
   );
 }

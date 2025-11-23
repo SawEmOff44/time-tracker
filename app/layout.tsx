@@ -1,12 +1,11 @@
-// app/layout.tsx
 import "./globals.css";
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 
 export const metadata: Metadata = {
-  title: "Rhinehart Co. Time Tracking",
-  description: "Location-aware time tracking for field crews.",
+  title: "Rhinehart Time",
+  description: "Simple GPS-aware time tracking",
 };
 
 export default function RootLayout({
@@ -16,47 +15,43 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-white text-gray-900">
-        <div className="min-h-screen flex flex-col">
-          {/* Global header (public) */}
-          <header className="border-b bg-white/80 backdrop-blur">
-            <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
-              {/* Logo always sends to /clock */}
-              <Link href="/clock" className="flex items-center gap-3">
+      <body className="min-h-screen bg-gray-50 text-gray-900">
+        {/* Public header */}
+        <header className="border-b bg-white">
+          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+            <Link href="/" className="flex items-center gap-3">
+              <div className="h-8 w-auto">
                 <Image
                   src="/rhinehart-logo.jpeg"
-                  alt="Rhinehart Co. Logo"
-                  width={150}
-                  height={50}
-                  className="h-10 w-auto object-contain"
+                  alt="Rhinehart Co. logo"
+                  width={160}
+                  height={32}
+                  className="h-8 w-auto object-contain"
                   priority
                 />
-                <span className="text-sm font-medium text-gray-700 tracking-tight">
-                  Time Tracking
-                </span>
+              </div>
+              <div className="flex flex-col leading-tight">
+                <span className="text-sm font-semibold">Time Tracking</span>
+              </div>
+            </Link>
+            <nav className="flex items-center gap-4 text-sm">
+              <Link
+                href="/clock"
+                className="rounded px-3 py-1.5 text-gray-700 hover:bg-gray-100"
+              >
+                Clock In / Out
               </Link>
+              <Link
+                href="/admin"
+                className="rounded px-3 py-1.5 text-gray-700 hover:bg-gray-100"
+              >
+                Admin
+              </Link>
+            </nav>
+          </div>
+        </header>
 
-              {/* Simple top-level nav */}
-              <nav className="flex items-center gap-3 text-sm">
-                <Link
-                  href="/clock"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Clock In / Out
-                </Link>
-                <Link
-                  href="/admin"
-                  className="px-2 py-1 rounded-md text-gray-700 hover:text-black hover:bg-gray-100 transition-colors"
-                >
-                  Admin
-                </Link>
-              </nav>
-            </div>
-          </header>
-
-          {/* Page content */}
-          <main className="flex-1 bg-gray-50/60">{children}</main>
-        </div>
+        <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
       </body>
     </html>
   );
