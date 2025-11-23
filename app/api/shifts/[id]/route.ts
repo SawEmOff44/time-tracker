@@ -6,52 +6,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
-// Simple admin guard using the same cookie as other admin APIs
 function requireAdmin() {
   const cookieStore = cookies();
   const session = cookieStore.get("admin_session")?.value;
   return !!session;
 }
 
-// Helper to safely extract id
-function getId(params: { id?: string | string[] }) {
-  const raw = params.id;
-  if (!raw) return null;
-  return Array.isArray(raw) ? raw[0] : raw;
-}
-
-// GET — fetch one shift
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  if (!requireAdmin()) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const id = getId(params);
-  if (!id) return NextResponse.json({ error: "Missing shift id" }, { status: 400 });
-
-  try {
-    const shift = await prisma.shift.findUnique({
-      where: { id },
-      include: {
-        user: true,
-        location: true,
-      },
-    });
-
-    if (!shift) return NextResponse.json({ error: "Shift not found" }, { status: 404 });
-
-    return NextResponse.json(shift);
-  } catch (err) {
-    console.error("Error fetching shift:", err);
-    return NextResponse.json({ error: "Failed to fetch shift" }, { status: 500 });
-  }
-}
-
-// PUT — update a shift
-export async function PUT(
+// PATCH /api/shifts/:id  → update an existing shift
+export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
@@ -59,22 +21,71 @@ export async function PUT(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const id = getId(params);
-  if (!id) return NextResponse.json({ error: "Missing shift id" }, { status: 400 });
+  const { id } = params;
 
   let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400 }
+    );
   }
+
+  const {
+    userId,
+    employeeId, // support old name just in case
+    locationId,
+    clockIn,
+    clockOut,
+  } = body;
 
   const data: any = {};
 
-  if ("clockIn" in body) data.clockIn = body.clockIn ? new Date(body.clockIn) : null;
-  if ("clockOut" in body) data.clockOut = body.clockOut ? new Date(body.clockOut) : null;
-  if ("locationId" in body)
-    data.locationId = body.locationId ? String(body.locationId) : null;
+  // Accept either userId or employeeId, map both to userId in DB
+  const resolvedUserId = userId ?? employeeId;
+  if (resolvedUserId) {
+    data.userId = resolvedUserId;
+  }
+
+  if (locationId !== undefined) {
+    // allow null / empty string to clear location
+    data.locationId = locationId || null;
+  }
+
+  if (clockIn) {
+    const ci = new Date(clockIn);
+    if (Number.isNaN(ci.getTime())) {
+      return NextResponse.json(
+        { error: "Invalid clockIn datetime" },
+        { status: 400 }
+      );
+    }
+    data.clockIn = ci;
+  }
+
+  if (clockOut !== undefined) {
+    if (clockOut === null || clockOut === "") {
+      data.clockOut = null;
+    } else {
+      const co = new Date(clockOut);
+      if (Number.isNaN(co.getTime())) {
+        return NextResponse.json(
+          { error: "Invalid clockOut datetime" },
+          { status: 400 }
+        );
+      }
+      data.clockOut = co;
+    }
+  }
+
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json(
+      { error: "No valid fields provided to update" },
+      { status: 400 }
+    );
+  }
 
   try {
     const updated = await prisma.shift.update({
@@ -89,11 +100,14 @@ export async function PUT(
     return NextResponse.json(updated);
   } catch (err) {
     console.error("Error updating shift:", err);
-    return NextResponse.json({ error: "Failed to update shift" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to update shift" },
+      { status: 500 }
+    );
   }
 }
 
-// DELETE — delete the shift
+// DELETE /api/shifts/:id  → delete a shift
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -102,17 +116,16 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const id = getId(params);
-  if (!id) return NextResponse.json({ error: "Missing shift id" }, { status: 400 });
-
   try {
     await prisma.shift.delete({
-      where: { id },
+      where: { id: params.id },
     });
-
-    return new NextResponse(null, { status: 204 });
+    return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("Error deleting shift:", err);
-    return NextResponse.json({ error: "Failed to delete shift" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to delete shift" },
+      { status: 500 }
+    );
   }
 }
