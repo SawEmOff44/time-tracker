@@ -17,7 +17,6 @@ function AdminLogoutButtonInner() {
       } catch (err) {
         console.error("Error logging out:", err);
       } finally {
-        // Always send them back to login and refresh
         router.push("/admin/login");
         router.refresh();
       }
@@ -36,8 +35,5 @@ function AdminLogoutButtonInner() {
   );
 }
 
-// Default export (for `import AdminLogoutButton from "..."`)
 export default AdminLogoutButtonInner;
-
-// Named export (for `import { AdminLogoutButton } from "..."`)
 export const AdminLogoutButton = AdminLogoutButtonInner;
