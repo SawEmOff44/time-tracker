@@ -1,9 +1,10 @@
+// app/admin/AdminLogoutButton.tsx
 "use client";
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 
-export function AdminLogoutButton() {
+function AdminLogoutButtonInner() {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -16,6 +17,7 @@ export function AdminLogoutButton() {
       } catch (err) {
         console.error("Error logging out:", err);
       } finally {
+        // Always send them back to login and refresh
         router.push("/admin/login");
         router.refresh();
       }
@@ -33,3 +35,9 @@ export function AdminLogoutButton() {
     </button>
   );
 }
+
+// Default export (for `import AdminLogoutButton from "..."`)
+export default AdminLogoutButtonInner;
+
+// Named export (for `import { AdminLogoutButton } from "..."`)
+export const AdminLogoutButton = AdminLogoutButtonInner;
