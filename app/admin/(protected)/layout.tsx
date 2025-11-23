@@ -1,14 +1,16 @@
+import { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import Image from "next/image";
+import AdminNavList from "../AdminNavList";
 
-export default async function ProtectedAdminLayout({
+export default function ProtectedAdminLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
-  const cookieStore = await cookies();
+  // Simple auth check – same behavior as before
+  const cookieStore = cookies();
   const session = cookieStore.get("admin_session")?.value;
 
   if (!session) {
@@ -16,47 +18,50 @@ export default async function ProtectedAdminLayout({
   }
 
   return (
-    <div className="space-y-4">
-      <header className="border-b bg-white">
-        <div className="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-3 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <Image
-              src="/rhinehart-logo.jpeg"
-              alt="Rhinehart Co. logo"
-              width={150}
-              height={40}
-              className="h-8 w-auto object-contain"
-            />
-            <div className="leading-tight">
-              <div className="text-sm font-semibold text-gray-900">
-                Rhinehart Time
+    <div className="min-h-screen bg-slate-100">
+      <div className="max-w-6xl mx-auto px-4 py-8">
+        <div className="flex gap-6">
+          {/* SIDEBAR */}
+          <aside className="w-64 shrink-0 bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col">
+            <div className="p-4 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="relative h-10 w-32">
+                  <Image
+                    src="/rhinehart-logo.jpeg"
+                    alt="Rhinehart Co. logo"
+                    fill
+                    className="object-contain"
+                    priority
+                  />
+                </div>
               </div>
-              <div className="text-xs text-gray-500">
-                Admin control panel
+              <div className="mt-3">
+                <p className="text-sm font-semibold text-slate-900">
+                  Rhinehart Time
+                </p>
+                <p className="text-xs text-slate-500">
+                  Admin control panel
+                </p>
               </div>
             </div>
-          </div>
-          <nav className="flex gap-2 text-xs md:text-sm">
-            {[
-              { href: "/admin", label: "Dashboard" },
-              { href: "/admin/employees", label: "Employees" },
-              { href: "/admin/locations", label: "Locations" },
-              { href: "/admin/shifts", label: "Shifts" },
-              { href: "/admin/payroll", label: "Payroll" },
-            ].map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="rounded px-3 py-1.5 text-gray-700 hover:bg-gray-100"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-      </header>
 
-      <div className="mx-auto max-w-6xl px-4 pb-8">{children}</div>
+            <nav className="flex-1 p-3">
+              <AdminNavList />
+            </nav>
+
+            <div className="border-t border-slate-100 px-3 py-2 text-[11px] text-slate-400">
+              v0.1 · Internal use only
+            </div>
+          </aside>
+
+          {/* MAIN CONTENT */}
+          <main className="flex-1">
+            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+              {children}
+            </div>
+          </main>
+        </div>
+      </div>
     </div>
   );
 }
