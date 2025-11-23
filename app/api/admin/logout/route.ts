@@ -1,15 +1,13 @@
-// app/api/admin/logout/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 
 export async function POST() {
-  const cookieStore = cookies();
+  const res = NextResponse.json({ ok: true });
 
-  // Remove the admin session cookie
-  cookieStore.set("admin_session", "", {
-    expires: new Date(0),
+  res.cookies.set("admin_session", "", {
+    httpOnly: true,
     path: "/",
+    expires: new Date(0),
   });
 
-  return NextResponse.json({ success: true });
+  return res;
 }

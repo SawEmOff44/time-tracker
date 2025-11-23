@@ -1,17 +1,35 @@
 "use client";
 
-export default function AdminLogoutButton() {
-  async function handleLogout() {
-    await fetch("/api/admin/logout", { method: "POST" });
-    window.location.href = "/admin/login";
-  }
+import { useTransition } from "react";
+import { useRouter } from "next/navigation";
+
+export function AdminLogoutButton() {
+  const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+
+  const handleLogout = () => {
+    startTransition(async () => {
+      try {
+        await fetch("/api/admin/logout", {
+          method: "POST",
+        });
+      } catch (err) {
+        console.error("Error logging out:", err);
+      } finally {
+        router.push("/admin/login");
+        router.refresh();
+      }
+    });
+  };
 
   return (
     <button
+      type="button"
       onClick={handleLogout}
-      className="px-3 py-1.5 text-xs rounded-md bg-red-600 text-white hover:bg-red-700 transition"
+      disabled={isPending}
+      className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-60"
     >
-      Logout
+      {isPending ? "Logging out…" : "Logout"}
     </button>
   );
 }
