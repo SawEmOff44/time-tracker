@@ -1,85 +1,77 @@
 // app/admin/layout.tsx
-import "../globals.css";
-import Image from "next/image";
-import Link from "next/link";
-import AdminLogoutButton from "./AdminLogoutButton";
+"use client";
 
-export const metadata = {
-  title: "Rhinehart Time | Admin",
-  description: "Admin dashboard for Rhinehart Time Tracker",
-};
+import React from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { usePathname } from "next/navigation";
+
+const NAV_ITEMS = [
+  { href: "/admin", label: "Dashboard" },
+  { href: "/admin/employees", label: "Employees" },
+  { href: "/admin/locations", label: "Locations" },
+  { href: "/admin/shifts", label: "Shifts" },
+  { href: "/admin/payroll", label: "Payroll" },
+];
 
 export default function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Admin header shell */}
-      <header className="border-b bg-white">
+    <div className="min-h-screen bg-slate-50">
+      <header className="border-b bg-white/80 backdrop-blur sticky top-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3 gap-4">
-          {/* Logo + brand */}
-          <Link href="/admin" className="flex items-center gap-3">
-            <Image
-              src="/rhinehart-logo.jpeg"
-              alt="Rhinehart Co. Logo"
-              width={180}
-              height={60}
-              className="h-10 w-auto object-contain"
-              priority
-            />
-            <div className="flex flex-col">
-              <span className="text-sm font-semibold tracking-tight">
+          {/* Logo + title */}
+          <div className="flex items-center gap-3">
+            <Link href="/clock" className="flex items-center gap-2">
+              <Image
+                src="/rhinehart-logo.jpeg"
+                alt="Rhinehart Co. Logo"
+                width={140}
+                height={40}
+                className="object-contain"
+                priority
+              />
+            </Link>
+            <div>
+              <div className="text-sm font-semibold tracking-tight">
                 Rhinehart Time
-              </span>
-              <span className="text-[11px] text-gray-500">
-                Admin Control Panel
-              </span>
+              </div>
+              <div className="text-[11px] text-slate-500">
+                Admin control panel
+              </div>
             </div>
-          </Link>
-
-          {/* Nav + logout */}
-          <div className="flex items-center gap-6">
-            <nav className="hidden sm:flex items-center gap-4 text-sm">
-              <Link
-                href="/admin"
-                className="text-gray-700 hover:text-black transition"
-              >
-                Dashboard
-              </Link>
-              <Link
-                href="/admin/employees"
-                className="text-gray-700 hover:text-black transition"
-              >
-                Employees
-              </Link>
-              <Link
-                href="/admin/locations"
-                className="text-gray-700 hover:text-black transition"
-              >
-                Locations
-              </Link>
-              <Link
-                href="/admin/shifts"
-                className="text-gray-700 hover:text-black transition"
-              >
-                Shifts
-              </Link>
-              <Link
-                href="/admin/payroll"
-                className="text-gray-700 hover:text-black transition"
-              >
-                Payroll
-              </Link>
-            </nav>
-
-            <AdminLogoutButton />
           </div>
+
+          {/* Nav */}
+          <nav className="flex items-center gap-2 text-xs sm:text-sm">
+            {NAV_ITEMS.map((item) => {
+              const active =
+                pathname === item.href ||
+                pathname.startsWith(item.href + "/");
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={`px-2 py-1 rounded-md border transition-colors ${
+                    active
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-200"
+                  }`}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
+          </nav>
         </div>
       </header>
 
-      {/* Admin content */}
       <main className="max-w-6xl mx-auto px-4 py-6">{children}</main>
     </div>
   );
