@@ -1,224 +1,341 @@
 // app/admin/(protected)/payroll/page.tsx
+"use client";
 
-import { prisma } from "@/lib/prisma";
+import { useEffect, useState } from "react";
 
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
-type PayrollPageProps = {
-  searchParams?: {
-    start?: string;
-    end?: string;
-  };
+// Shape of what /api/admin/payroll returns per employee
+type PayrollRow = {
+  userId: string;
+  name: string;
+  employeeCode: string | null;
+  totalHours: number;
+  shiftCount?: number | null;
 };
 
-function parseDateOnly(value?: string): Date | undefined {
-  if (!value) return undefined;
-  // Expecting YYYY-MM-DD from <input type="date">
-  const iso = `${value}T00:00:00`;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return undefined;
-  return d;
+// ----- Helpers: dates & pay periods (Fri → Thu) -----------------------------
+
+// Format for <input type="date">
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-export default async function PayrollPage({ searchParams }: PayrollPageProps) {
-  const startParam = searchParams?.start || "";
-  const endParam = searchParams?.end || "";
+/**
+ * Returns the Friday–Thursday period that contains "today".
+ * Friday is the START of the period, Thursday is the END.
+ */
+function getCurrentPayPeriod(today = new Date()) {
+  const day = today.getDay(); // 0 = Sun … 5 = Fri, 6 = Sat
+  const daysSinceFriday = (day - 5 + 7) % 7;
 
-  const startDate = parseDateOnly(startParam);
-  const endDate = parseDateOnly(endParam);
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - daysSinceFriday
+  );
+  const end = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate() + 6
+  );
 
-  // Build Prisma filter
-  const where: any = {};
-  if (startDate || endDate) {
-    where.clockIn = {};
-    if (startDate) {
-      where.clockIn.gte = startDate;
-    }
-    if (endDate) {
-      // End of day for the end date
-      const endOfDay = new Date(endDate);
-      endOfDay.setHours(23, 59, 59, 999);
-      where.clockIn.lte = endOfDay;
+  return {
+    startDateStr: formatDateInput(start),
+    endDateStr: formatDateInput(end),
+  };
+}
+
+// Pretty label for card header
+function formatDisplayDate(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+// ---------------------------------------------------------------------------
+
+export default function AdminPayrollPage() {
+  const { startDateStr, endDateStr } = getCurrentPayPeriod();
+
+  const [startDate, setStartDate] = useState(startDateStr);
+  const [endDate, setEndDate] = useState(endDateStr);
+  const [rows, setRows] = useState<PayrollRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [totalHours, setTotalHours] = useState<number>(0);
+
+  // Move by whole pay periods (7 days)
+  function shiftPayPeriod(offsetWeeks: number) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    start.setDate(start.getDate() + offsetWeeks * 7);
+    end.setDate(end.getDate() + offsetWeeks * 7);
+
+    setStartDate(formatDateInput(start));
+    setEndDate(formatDateInput(end));
+  }
+
+  async function loadPayroll() {
+    if (!startDate || !endDate) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const params = new URLSearchParams({
+        start: startDate,
+        end: endDate,
+      });
+
+      const res = await fetch(`/api/admin/payroll?${params.toString()}`);
+
+      if (!res.ok) {
+        throw new Error("Failed to load payroll data");
+      }
+
+      const data = (await res.json()) as PayrollRow[];
+
+      setRows(data);
+      const sum = data.reduce(
+        (acc, row) =>
+          acc +
+          (typeof row.totalHours === "number" ? row.totalHours : 0),
+        0
+      );
+      setTotalHours(Number(sum.toFixed(2)));
+    } catch (err) {
+      console.error(err);
+      setError("Could not load payroll data for this period.");
+      setRows([]);
+      setTotalHours(0);
+    } finally {
+      setLoading(false);
     }
   }
 
-  const shifts = await prisma.shift.findMany({
-    where,
-    orderBy: { clockIn: "desc" },
-    include: {
-      user: true,
-      location: true,
-    },
-  });
+  // Initial load for the current pay period
+  useEffect(() => {
+    void loadPayroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const rows = shifts.map((s) => {
-    const clockIn = s.clockIn ? new Date(s.clockIn) : null;
-    const clockOut = s.clockOut ? new Date(s.clockOut) : null;
+  // CSV export for current period
+  function exportCSV() {
+    if (!rows.length) return;
 
-    const hours =
-      clockIn && clockOut
-        ? (clockOut.getTime() - clockIn.getTime()) / 1000 / 60 / 60
-        : 0;
+    const header = [
+      "User ID",
+      "Name",
+      "Employee Code",
+      "Shift Count",
+      "Total Hours",
+    ];
 
-    return {
-      id: s.id,
-      employee: s.user?.name || "Unknown",
-      code: s.user?.employeeCode || "",
-      date: clockIn ? clockIn.toISOString().slice(0, 10) : "",
-      clockIn: clockIn ? clockIn.toLocaleTimeString() : "",
-      clockOut: clockOut ? clockOut.toLocaleTimeString() : "",
-      hours,
-      location: s.location?.name || "Unknown",
-    };
-  });
+    const lines = [
+      header.join(","),
+      ...rows.map((row) =>
+        [
+          row.userId,
+          `"${(row.name || "").replace(/"/g, '""')}"`,
+          row.employeeCode ?? "",
+          row.shiftCount ?? "",
+          row.totalHours.toFixed(2),
+        ].join(",")
+      ),
+    ];
 
-  const totalHours = rows.reduce((sum, r) => sum + (r.hours || 0), 0);
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
 
-  // Build CSV export URL with same filters
-  const search = new URLSearchParams();
-  if (startParam) search.set("start", startParam);
-  if (endParam) search.set("end", endParam);
-  const exportHref =
-    "/api/export/payroll" + (search.toString() ? `?${search.toString()}` : "");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payroll_${startDate}_to_${endDate}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // Display label – **use the selected start/end dates directly**
+  const periodLabel = (() => {
+    if (!startDate || !endDate) return "";
+    const s = new Date(startDate);
+    const e = new Date(endDate);
+    return `${formatDisplayDate(s)} – ${formatDisplayDate(e)} (Fri–Thu)`;
+  })();
 
   return (
-    <main className="flex-1 p-6">
-      {/* Header + Export */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Payroll &amp; Shifts</h1>
-          <p className="text-sm text-slate-300">
-            Review recorded shifts and export to CSV for payroll.
-          </p>
-        </div>
-
-        <a
-          href={exportHref}
-          className="inline-flex items-center px-4 py-2 rounded bg-black text-white text-sm font-medium hover:bg-gray-800"
-        >
-          Download CSV
-        </a>
+    <div className="space-y-8">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-50">Payroll</h1>
+        <p className="mt-1 text-sm text-slate-400">
+          Review total hours by worker for the selected pay period (Friday
+          through Thursday).
+        </p>
       </div>
 
-      {/* Filters */}
-      <form
-        method="GET"
-        className="mb-4 flex flex-col md:flex-row md:items-end gap-3"
-      >
-        <div>
-          <label className="block text-xs font-semibold text-slate-200 mb-1">
-            Start Date
-          </label>
-          <input
-            type="date"
-            name="start"
-            defaultValue={startParam}
-            className="border rounded px-2 py-1 text-sm"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-semibold text-slate-200 mb-1">
-            End Date
-          </label>
-          <input
-            type="date"
-            name="end"
-            defaultValue={endParam}
-            className="border rounded px-2 py-1 text-sm"
-          />
-        </div>
-
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            className="px-3 py-2 rounded bg-black text-white text-xs font-semibold hover:bg-gray-800"
-          >
-            Apply
-          </button>
-          {(startParam || endParam) && (
-            <a
-              href="/admin/payroll"
-              className="px-3 py-2 rounded border text-xs font-semibold text-slate-200 bg-slate-900 hover:bg-slate-950"
-            >
-              Clear
-            </a>
-          )}
-        </div>
-      </form>
-
-      {/* Summary */}
-      <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-        <div className="text-sm text-slate-200">
-          <span className="font-semibold">Total Shifts:</span> {rows.length}
-        </div>
-        <div className="text-sm text-slate-200">
-          <span className="font-semibold">Total Hours:</span>{" "}
-          {totalHours.toFixed(2)}
-        </div>
-        {startParam || endParam ? (
-          <div className="text-xs text-slate-400">
-            Filtered by{" "}
-            {startParam && (
-              <>
-                from <span className="font-mono">{startParam}</span>{" "}
-              </>
-            )}
-            {endParam && (
-              <>
-                to <span className="font-mono">{endParam}</span>
-              </>
-            )}
+      {/* Filters & actions */}
+      <div className="card bg-slate-900/80 border border-slate-700/80">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Pay period
+            </p>
+            <p className="mt-1 text-sm text-slate-100">{periodLabel}</p>
           </div>
-        ) : null}
+
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Start (Friday)
+              </label>
+              <input
+                type="date"
+                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                End (Thursday)
+              </label>
+              <input
+                type="date"
+                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => shiftPayPeriod(-1)}
+              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              ◀ Previous period
+            </button>
+
+            <button
+              type="button"
+              onClick={() => shiftPayPeriod(1)}
+              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              Next period ▶
+            </button>
+
+            <button
+              type="button"
+              onClick={loadPayroll}
+              disabled={loading}
+              className="rounded-full bg-amber-400 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
+            >
+              {loading ? "Loading…" : "Apply"}
+            </button>
+          </div>
+        </div>
+
+        {/* Error */}
+        {error && (
+          <p className="mt-3 text-xs text-red-300">{error}</p>
+        )}
+
+        {/* Summary */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3">
+          <p className="text-xs text-slate-400">
+            {rows.length === 0
+              ? "No hours recorded in this period."
+              : `${rows.length} worker${
+                  rows.length === 1 ? "" : "s"
+                } with hours in this period.`}
+          </p>
+          <p className="text-xs font-semibold text-slate-100">
+            Total hours this period:{" "}
+            <span className="text-amber-300">
+              {totalHours.toFixed(2)}h
+            </span>
+          </p>
+        </div>
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto border rounded-lg bg-slate-900">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-900 border-b">
-            <tr>
-              <th className="px-3 py-2 text-left font-semibold">Employee</th>
-              <th className="px-3 py-2 text-left font-semibold">Code</th>
-              <th className="px-3 py-2 text-left font-semibold">Date</th>
-              <th className="px-3 py-2 text-left font-semibold">Clock In</th>
-              <th className="px-3 py-2 text-left font-semibold">Clock Out</th>
-              <th className="px-3 py-2 text-right font-semibold">Hours</th>
-              <th className="px-3 py-2 text-left font-semibold">Location</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td
-                  colSpan={7}
-                  className="px-3 py-6 text-center text-slate-400"
-                >
-                  No shifts found for this period.
-                </td>
+      <div className="card bg-slate-900/80 border border-slate-700/80">
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-slate-100">
+            Hours by worker
+          </h2>
+          <div className="flex items-center gap-3">
+            <p className="text-[11px] text-slate-400">
+              Based on all shifts within the selected dates.
+            </p>
+            <button
+              type="button"
+              onClick={exportCSV}
+              disabled={!rows.length}
+              className="rounded-full border border-slate-600 px-3 py-1.5 text-[11px] font-medium text-slate-100 hover:bg-slate-800 disabled:opacity-40"
+            >
+              Export CSV
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2 overflow-x-auto">
+          <table className="admin-table min-w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-800/80">
+                <th className="px-3 py-2 text-left">Employee</th>
+                <th className="px-3 py-2 text-left">Code</th>
+                <th className="px-3 py-2 text-right">Shift count</th>
+                <th className="px-3 py-2 text-right">Total hours</th>
               </tr>
-            ) : (
-              rows.map((r) => (
-                <tr
-                  key={r.id}
-                  className="border-b last:border-b-0 hover:bg-slate-950"
-                >
-                  <td className="px-3 py-2">{r.employee}</td>
-                  <td className="px-3 py-2">{r.code}</td>
-                  <td className="px-3 py-2">{r.date}</td>
-                  <td className="px-3 py-2">{r.clockIn}</td>
-                  <td className="px-3 py-2">{r.clockOut}</td>
-                  <td className="px-3 py-2 text-right">
-                    {r.hours ? r.hours.toFixed(2) : "-"}
+            </thead>
+            <tbody>
+              {rows.length === 0 && !loading && (
+                <tr>
+                  <td
+                    colSpan={4}
+                    className="px-3 py-6 text-center text-slate-400"
+                  >
+                    No data for this period.
                   </td>
-                  <td className="px-3 py-2">{r.location}</td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              )}
+
+              {rows.map((row) => (
+                <tr
+                  key={row.userId}
+                  className="border-b border-slate-800/80"
+                >
+                  <td className="px-3 py-2 align-middle">
+                    <div className="text-sm text-slate-50">
+                      {row.name || "Unnamed worker"}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 align-middle text-slate-200">
+                    {row.employeeCode ?? "—"}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-slate-200">
+                    {typeof row.shiftCount === "number"
+                      ? row.shiftCount
+                      : "—"}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-slate-50">
+                    {row.totalHours.toFixed(2)}h
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
