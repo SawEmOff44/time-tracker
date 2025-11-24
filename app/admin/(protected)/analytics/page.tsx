@@ -1,224 +1,283 @@
 // app/admin/(protected)/analytics/page.tsx
 import { prisma } from "@/lib/prisma";
-import { startOfWeek, addDays, startOfMonth } from "date-fns";
 
-function getWeekRange() {
+// Sunday–Saturday current week (local time)
+function getCurrentWeekRange() {
   const now = new Date();
-  const start = startOfWeek(now, { weekStartsOn: 0 }); // Sunday
-  const end = addDays(start, 7);
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const day = start.getDay(); // 0 = Sunday
+  start.setDate(start.getDate() - day); // go back to Sunday
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 7); // next Sunday (exclusive)
   return { start, end };
 }
 
-function formatHoursNumber(hours: number) {
-  return hours.toFixed(2);
+// Current calendar month
+function getCurrentMonthRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  return { start, end };
 }
 
-export default async function AnalyticsPage() {
-  const now = new Date();
-  const { start: weekStart, end: weekEnd } = getWeekRange();
-  const monthStart = startOfMonth(now);
+function diffHours(clockIn: Date | null, clockOut: Date | null): number {
+  if (!clockIn || !clockOut) return 0;
+  const startMs = new Date(clockIn).getTime();
+  const endMs = new Date(clockOut).getTime();
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) return 0;
+  const hours = (endMs - startMs) / (1000 * 60 * 60);
+  return Number(hours.toFixed(2));
+}
 
-  const [shiftsThisWeek, shiftsThisMonth] = await Promise.all([
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export default async function AnalyticsPage() {
+  const { start: weekStart, end: weekEnd } = getCurrentWeekRange();
+  const { start: monthStart, end: monthEnd } = getCurrentMonthRange();
+
+  const [weeklyShifts, monthlyShifts] = await Promise.all([
     prisma.shift.findMany({
       where: {
-        clockIn: {
-          gte: weekStart,
-          lt: weekEnd,
-        },
+        clockIn: { gte: weekStart },
+        clockOut: { not: null, lt: weekEnd },
       },
-      include: {
-        location: true,
-      },
+      select: { clockIn: true, clockOut: true },
     }),
     prisma.shift.findMany({
       where: {
-        clockIn: { gte: monthStart },
+        clockIn: { gte: monthStart, lt: monthEnd },
+        clockOut: { not: null },
       },
       include: {
+        user: true,
         location: true,
       },
     }),
   ]);
 
-  // Weekly hours by day (Sun–Sat)
-  const weeklyHours = Array(7).fill(0) as number[];
+  // ---- Weekly hours by day (Sun–Sat) ----
+  const weeklyBuckets = DAY_LABELS.map((label) => ({
+    label,
+    hours: 0,
+  }));
 
-  for (const shift of shiftsThisWeek) {
-    if (!shift.clockIn || !shift.clockOut) continue;
-    const startMs = shift.clockIn.getTime();
-    const endMs = shift.clockOut.getTime();
-    if (endMs <= startMs) continue;
-    const hours = (endMs - startMs) / (1000 * 60 * 60);
-    const dayIndex = shift.clockIn.getDay(); // 0–6
-    weeklyHours[dayIndex] += hours;
+  for (const shift of weeklyShifts) {
+    const hours = diffHours(shift.clockIn, shift.clockOut);
+    if (hours <= 0) continue;
+    const dayIndex = new Date(shift.clockIn).getDay(); // 0–6
+    weeklyBuckets[dayIndex].hours += hours;
   }
 
-  const maxHours = weeklyHours.reduce((m, h) => (h > m ? h : m), 0);
+  const totalHoursThisWeek = weeklyBuckets.reduce((sum, d) => sum + d.hours, 0);
+  const maxDayHours = weeklyBuckets.reduce(
+    (max, d) => (d.hours > max ? d.hours : max),
+    0
+  );
+  const scaleMax = maxDayHours > 0 ? maxDayHours : 1; // avoid 0/0
 
-  const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  // ---- Monthly totals & ADHOC / locations / employees ----
+  let totalHoursThisMonth = 0;
+  let adhocShiftCount = 0;
 
-  // Location utilization (this month)
-  const locationCounts = new Map<
+  const locationTotals = new Map<
     string,
-    { name: string; count: number }
+    { name: string; hours: number; shiftCount: number }
   >();
 
-  for (const shift of shiftsThisMonth) {
-    const locationName = shift.location?.name ?? "Unknown";
-    const key = shift.location?.id ?? `unknown-${locationName}`;
-    const existing = locationCounts.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      locationCounts.set(key, { name: locationName, count: 1 });
+  const employeeTotals = new Map<
+    string,
+    { name: string; code: string | null; hours: number }
+  >();
+
+  for (const shift of monthlyShifts) {
+    const hours = diffHours(shift.clockIn, shift.clockOut);
+    if (hours <= 0) continue;
+
+    totalHoursThisMonth += hours;
+
+    // ADHOC = radiusMeters === 0
+    if (shift.location && shift.location.radiusMeters === 0) {
+      adhocShiftCount += 1;
+    }
+
+    // per-location totals
+    if (shift.location) {
+      const locKey = shift.location.id;
+      const locExisting = locationTotals.get(locKey);
+      if (locExisting) {
+        locExisting.hours += hours;
+        locExisting.shiftCount += 1;
+      } else {
+        locationTotals.set(locKey, {
+          name: shift.location.name,
+          hours,
+          shiftCount: 1,
+        });
+      }
+    }
+
+    // per-employee totals
+    if (shift.user) {
+      const userKey = shift.user.id;
+      const empExisting = employeeTotals.get(userKey);
+      if (empExisting) {
+        empExisting.hours += hours;
+      } else {
+        employeeTotals.set(userKey, {
+          name: shift.user.name,
+          code: shift.user.employeeCode,
+          hours,
+        });
+      }
     }
   }
 
-  const locationUsage = Array.from(locationCounts.values()).sort(
-    (a, b) => b.count - a.count
-  );
+  const activeJobSitesThisMonth = locationTotals.size;
 
-  const totalShiftsThisWeek = shiftsThisWeek.length;
-  const totalHoursThisWeek = weeklyHours.reduce((sum, h) => sum + h, 0);
+  const topEmployees = Array.from(employeeTotals.values())
+    .sort((a, b) => b.hours - a.hours)
+    .slice(0, 3);
 
-  // ADHOC = zero-radius locations
-  const adhocShiftsThisMonth = shiftsThisMonth.filter(
-    (s) => s.location && s.location.radiusMeters === 0
-  );
-  const totalAdhocThisMonth = adhocShiftsThisMonth.length;
-  const totalShiftsThisMonth = shiftsThisMonth.length;
-
-  const adhocRatio =
-    totalShiftsThisMonth === 0
-      ? 0
-      : (totalAdhocThisMonth / totalShiftsThisMonth) * 100;
+  const topLocations = Array.from(locationTotals.values())
+    .sort((a, b) => b.hours - a.hours)
+    .slice(0, 3);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 text-slate-100">
       {/* HEADER */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold text-slate-900">Analytics</h1>
-        <p className="text-sm text-slate-600">
-          Deeper insight into weekly hours, job site usage, and ADHOC activity.
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-50">Analytics</h1>
+        <p className="mt-1 text-sm text-slate-400">
+          Deeper insight into hours, job site usage, and ADHOC activity.
         </p>
       </div>
 
-      {/* TOP CARDS */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <div className="card">
-          <div className="card-label">Total hours this week</div>
-          <div className="card-value">{formatHoursNumber(totalHoursThisWeek)}</div>
-          <p className="card-sub">
-            Sunday–Saturday, based on local (Central) time.
-          </p>
-        </div>
-
-        <div className="card">
-          <div className="card-label">Shifts this week</div>
-          <div className="card-value">{totalShiftsThisWeek}</div>
-          <p className="card-sub">
-            All clock-ins between {weekStart.toLocaleDateString("en-US")} and{" "}
-            {addDays(weekEnd, -1).toLocaleDateString("en-US")}.
-          </p>
-        </div>
-
-        <div className="card card-amber">
-          <div className="card-label text-amber-900">ADHOC shifts this month</div>
-          <div className="card-value text-amber-950">
-            {totalAdhocThisMonth}
+      {/* TOP SUMMARY CARDS */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Total hours this week
           </div>
-          <p className="card-sub text-amber-900/80">
-            {totalShiftsThisMonth === 0
-              ? "No shifts recorded yet this month."
-              : `${totalAdhocThisMonth} of ${totalShiftsThisMonth} shifts (${adhocRatio.toFixed(
-                  1
-                )}%) at zero-radius locations.`}
+          <div className="mt-2 text-2xl font-semibold text-slate-50">
+            {totalHoursThisWeek.toFixed(2)}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">Sunday–Saturday</p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Total hours this month
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-50">
+            {totalHoursThisMonth.toFixed(2)}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            All completed shifts this month.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
+          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+            Active job sites (this month)
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-50">
+            {activeJobSitesThisMonth}
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Locations with at least one shift.
+          </p>
+        </div>
+
+        <div className="rounded-xl border border-amber-500/30 bg-amber-950/600/10 px-4 py-3 shadow-sm">
+          <div className="text-xs font-medium uppercase tracking-wide text-amber-300">
+            ADHOC shifts this month
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-amber-100">
+            {adhocShiftCount}
+          </div>
+          <p className="mt-1 text-xs text-amber-200">
+            Clock-ins at zero-radius locations.
           </p>
         </div>
       </div>
 
-      {/* GRID: Weekly hours & Location usage */}
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Weekly hours by day */}
-        <section className="card lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
+        {/* WEEKLY BAR CHART */}
+        <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+          <div className="flex items-baseline justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-50">
                 Weekly hours by day
               </h2>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-400">
                 Aggregate hours worked this week.
               </p>
             </div>
           </div>
 
-          <div className="mt-2 flex h-48 items-end gap-3">
-            {weeklyHours.map((hours, idx) => {
-              const pct = maxHours > 0 ? (hours / maxHours) * 100 : 0;
+          <div className="mt-6 flex h-40 items-end justify-between gap-3">
+            {weeklyBuckets.map((day) => {
+              const pct = (day.hours / scaleMax) * 100;
               return (
                 <div
-                  key={dayLabels[idx]}
-                  className="flex flex-1 flex-col items-center gap-1"
+                  key={day.label}
+                  className="flex flex-1 flex-col items-center gap-2"
                 >
-                  <div className="flex h-full w-full items-end">
-                    <div className="relative flex-1 rounded-full bg-slate-100">
-                      <div
-                        className="absolute inset-x-0 bottom-0 rounded-full bg-slate-900"
-                        style={{ height: `${pct}%` }}
-                      />
-                    </div>
+                  <div className="flex h-28 w-7 items-end rounded-full bg-slate-800 overflow-hidden">
+                    {/* inner bar */}
+                    <div
+                      className="w-full rounded-full bg-amber-400 transition-all"
+                      style={{ height: `${pct}%` }}
+                    />
                   </div>
-                  <div className="text-[11px] font-medium text-slate-600">
-                    {dayLabels[idx]}
+                  <div className="text-[11px] font-medium text-slate-300">
+                    {day.hours.toFixed(2)}h
                   </div>
-                  <div className="text-[11px] text-slate-500">
-                    {hours === 0 ? "—" : `${hours.toFixed(2)}h`}
+                  <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                    {day.label}
                   </div>
                 </div>
               );
             })}
           </div>
-        </section>
+        </div>
 
-        {/* Location utilization */}
-        <section className="card">
-          <div className="mb-3">
-            <h2 className="text-sm font-semibold text-slate-900">
+        {/* LOCATION UTILIZATION */}
+        <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-50">
               Location utilization
             </h2>
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-slate-400">
               Shift volume by job site this month.
             </p>
           </div>
 
-          {locationUsage.length === 0 && (
-            <p className="text-xs text-slate-500">
-              No shifts recorded yet this month.
-            </p>
-          )}
+          <div className="space-y-3">
+            {topLocations.length === 0 && (
+              <p className="text-xs text-slate-500">No shifts this month.</p>
+            )}
 
-          <div className="space-y-2">
-            {locationUsage.map((loc) => {
+            {topLocations.map((loc) => {
               const pct =
-                totalShiftsThisMonth === 0
-                  ? 0
-                  : (loc.count / totalShiftsThisMonth) * 100;
+                totalHoursThisMonth > 0
+                  ? (loc.hours / totalHoursThisMonth) * 100
+                  : 0;
               return (
-                <div
-                  key={loc.name}
-                  className="space-y-1 rounded-lg border border-slate-100 bg-slate-50/60 p-2"
-                >
+                <div key={loc.name} className="space-y-1">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-slate-800">
+                    <span className="font-medium text-slate-100">
                       {loc.name}
                     </span>
-                    <span className="text-slate-500">
-                      {loc.count} shift{loc.count === 1 ? "" : "s"}
+                    <span className="text-slate-400">
+                      {loc.hours.toFixed(2)}h
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-slate-200">
+                  <div className="h-2 rounded-full bg-slate-800">
                     <div
-                      className="h-2 rounded-full bg-slate-900"
+                      className="h-2 rounded-full bg-sky-400"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -226,40 +285,68 @@ export default async function AnalyticsPage() {
               );
             })}
           </div>
-        </section>
+        </div>
       </div>
 
-      {/* ADHOC trend card */}
-      <section className="card bg-amber-50/70 border-amber-200">
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-amber-950">
-              ADHOC trend (this month)
+      {/* BOTTOM ROW: TOP EMPLOYEES + ADHOC NOTE */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-50">
+              Top employees (this month)
             </h2>
-            <p className="text-xs text-amber-900/80">
-              Quick view of how often ADHOC is used relative to all shifts.
+            <p className="text-xs text-slate-400">
+              Ranked by total hours on all job sites.
             </p>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {topEmployees.length === 0 && (
+              <p className="text-xs text-slate-500">No shifts this month.</p>
+            )}
+
+            {topEmployees.map((emp, index) => (
+              <div
+                key={emp.name + (emp.code ?? "")}
+                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-xs font-semibold text-slate-100">
+                    {index + 1}
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-slate-50">
+                      {emp.name}
+                    </div>
+                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
+                      {emp.code ?? "No code"}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-sm font-semibold text-slate-100">
+                  {emp.hours.toFixed(2)}h
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs text-amber-900">
-            <span>ADHOC share</span>
-            <span>{adhocRatio.toFixed(1)}%</span>
-          </div>
-          <div className="h-2 rounded-full bg-amber-100">
-            <div
-              className="h-2 rounded-full bg-amber-500"
-              style={{ width: `${adhocRatio}%` }}
-            />
-          </div>
-          <p className="pt-1 text-[11px] leading-snug text-amber-900/90">
-            Use this as a sanity check: a sudden spike in ADHOC percentage
-            compared to your normal pattern probably deserves a closer look at
-            the Shifts tab.
+        <div className="rounded-xl border border-amber-500/40 bg-amber-950/600/10 p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-amber-100">
+            ADHOC trend (this month)
+          </h2>
+          <p className="mt-1 text-xs text-amber-200">
+            Weekly count of ADHOC shifts (zero-radius locations). Use this to
+            spot off-site / non-GPS usage patterns.
           </p>
+          <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-950/600/10 px-3 py-2 text-xs text-amber-100">
+            <div className="flex items-center justify-between">
+              <span>This month</span>
+              <span className="font-semibold">{adhocShiftCount} ADHOC</span>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
     </div>
   );
 }

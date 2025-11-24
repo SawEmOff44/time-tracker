@@ -89,7 +89,7 @@ export default function LocationMap({
         center={center}
         zoom={16}
         scrollWheelZoom={true}
-        className="w-full h-80 rounded-lg border border-gray-200 overflow-hidden"
+        className="w-full h-80 rounded-lg border border-slate-800 overflow-hidden"
       >
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"

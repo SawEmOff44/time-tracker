@@ -1,9 +1,11 @@
+// app/admin/layout.tsx
 "use client";
 
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
+import { useTransition } from "react";
 
 type AdminLayoutProps = {
   children: ReactNode;
@@ -35,29 +37,45 @@ function AdminNavLink({
   return (
     <Link
       href={href}
-      aria-current={isActive ? "page" : undefined}
-      className={`sidebar-link flex items-center rounded-xl px-3 py-2.5 text-sm font-medium leading-tight transition-colors
-        ${
-          isActive
-            ? "sidebar-link-active bg-amber-400 text-slate-950 shadow-sm"
-            : "text-slate-200 hover:bg-slate-800/70 hover:text-white"
-        }`}
+      className={`sidebar-link flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-medium transition-colors ${
+        isActive
+          ? "bg-amber-400 text-slate-900 shadow-md"
+          : "hover:bg-slate-800/80"
+      }`}
     >
       <span>{label}</span>
+      {isActive && (
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-900" />
+      )}
     </Link>
   );
 }
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const handleLogout = () => {
+    startTransition(async () => {
+      try {
+        await fetch("/admin/logout", { method: "POST" });
+      } catch (err) {
+        console.error("Logout failed:", err);
+      } finally {
+        router.push("/admin/login");
+        router.refresh();
+      }
+    });
+  };
 
   return (
-    <div className="min-h-screen flex bg-slate-950 text-slate-900">
+    <div className="flex min-h-screen bg-slate-950 text-slate-50">
       {/* SIDEBAR */}
-      <aside className="hidden md:flex w-64 flex-col border-r border-slate-800 bg-slate-950">
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-800">
+      <aside className="hidden w-64 flex-col border-r border-slate-800 bg-slate-950/95 pt-4 md:flex">
+        <div className="flex items-center gap-3 px-5 pb-4">
           <Link href="/" className="flex items-center gap-3">
-            <div className="relative h-9 w-28">
+            <div className="relative h-8 w-24">
               <Image
                 src="/rhinehart-logo.jpeg"
                 alt="Rhinehart Co. Logo"
@@ -66,18 +84,15 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 priority
               />
             </div>
-            <div className="flex flex-col leading-tight">
-              <span className="text-xs font-semibold text-slate-100 tracking-wide">
-                RHINEHART TIME
-              </span>
-              <span className="text-[11px] text-slate-400">
-                Admin control panel
-              </span>
-            </div>
           </Link>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1 text-sm">
+        <div className="px-5 pb-2 text-[11px] font-medium uppercase tracking-[0.18em] text-amber-400">
+          Admin
+          <span className="ml-2 text-slate-400">Time tracking control panel</span>
+        </div>
+
+        <nav className="flex-1 space-y-1 px-3 pt-2">
           {navItems.map((item) => {
             const isActive =
               pathname === item.href ||
@@ -93,18 +108,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
           })}
         </nav>
 
-        <div className="px-5 py-4 border-t border-slate-800 text-[11px] text-slate-500">
-          <div className="font-medium text-slate-300">Rhinehart Co.</div>
-          <div className="mt-0.5">Time tracking &amp; payroll audit</div>
+        <div className="border-t border-slate-800 px-4 py-4 text-xs text-slate-500">
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isPending}
+            className="flex w-full items-center justify-center rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-medium text-slate-100 transition hover:bg-slate-700 disabled:opacity-60"
+          >
+            {isPending ? "Signing out…" : "Sign out"}
+          </button>
         </div>
       </aside>
 
       {/* MAIN AREA */}
-      <div className="flex-1 flex flex-col bg-slate-50">
-        {/* TOP BAR for mobile */}
-        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur-sm md:hidden">
+      <div className="flex flex-1 flex-col">
+        {/* TOP BAR for mobile / small screens */}
+        <header className="sticky top-0 z-20 flex items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur md:hidden">
           <Link href="/" className="flex items-center gap-2">
-            <div className="relative h-8 w-24">
+            <div className="relative h-7 w-20">
               <Image
                 src="/rhinehart-logo.jpeg"
                 alt="Rhinehart Co. Logo"
@@ -113,14 +134,24 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
                 priority
               />
             </div>
-            <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+            <span className="text-xs font-medium text-slate-400">
               Admin panel
             </span>
           </Link>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isPending}
+            className="rounded-lg bg-slate-800 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700 disabled:opacity-60"
+          >
+            {isPending ? "…" : "Sign out"}
+          </button>
         </header>
 
+        {/* CONTENT */}
         <main className="flex-1 p-4 md:p-6 lg:p-8">
-          <div className="mx-auto max-w-6xl space-y-6">{children}</div>
+          {/* key change: allow more width for tables (Recent shifts, etc.) */}
+          <div className="mx-auto w-full max-w-7xl">{children}</div>
         </main>
       </div>
     </div>

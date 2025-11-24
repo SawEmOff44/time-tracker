@@ -35,11 +35,11 @@ export default function AdminLoginPage() {
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center">
-      <div className="w-full max-w-sm rounded-lg bg-white p-6 shadow-sm">
-        <h1 className="mb-2 text-lg font-semibold text-gray-900">
+      <div className="w-full max-w-sm rounded-lg bg-slate-900 p-6 shadow-sm">
+        <h1 className="mb-2 text-lg font-semibold text-slate-100">
           Admin login
         </h1>
-        <p className="mb-4 text-xs text-gray-500">
+        <p className="mb-4 text-xs text-slate-400">
           Enter the admin password to access the control panel.
         </p>
         {error && (
@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
         )}
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">
+            <label className="mb-1 block text-xs font-medium text-slate-200">
               Admin password
             </label>
             <input

@@ -12,7 +12,7 @@ export default function Map({ lat, lng, radius }: MapProps) {
 
   if (!hasCoords) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-gray-100 text-xs text-gray-500">
+      <div className="w-full h-full flex items-center justify-center bg-slate-900 text-xs text-slate-400">
         Enter valid latitude and longitude to preview.
       </div>
     );
@@ -43,7 +43,7 @@ export default function Map({ lat, lng, radius }: MapProps) {
       <div className="absolute bottom-0 left-0 right-0 p-3 bg-black/60 backdrop-blur-sm text-[0.7rem]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="uppercase tracking-wide text-[0.65rem] text-gray-400">
+            <div className="uppercase tracking-wide text-[0.65rem] text-slate-500">
               Site center (approx)
             </div>
             <div className="font-mono text-xs">
@@ -51,7 +51,7 @@ export default function Map({ lat, lng, radius }: MapProps) {
             </div>
           </div>
           <div className="text-right">
-            <div className="uppercase tracking-wide text-[0.65rem] text-gray-400">
+            <div className="uppercase tracking-wide text-[0.65rem] text-slate-500">
               Geofence radius
             </div>
             {radius === 0 ? (

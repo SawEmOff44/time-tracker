@@ -5,40 +5,22 @@
 /* Leaflet map styles */
 @import "leaflet/dist/leaflet.css";
 
-/* Your global styles */
+/* Base reset */
 html,
 body {
   margin: 0;
   padding: 0;
-  background-color: #ffffff;
 }
 
-/* --- Rhinehart Time: global admin UI polish --------------------------- */
-
-/* Base typography */
+/* Overall dark shell – pages can still override with bg-* classes */
+html,
 body {
-  color: #1e293b !important; /* slate-800 */
+  background-color: #020617; /* slate-950 */
 }
 
-/* Make all generic "muted" text still readable */
-.text-gray-500,
-.text-gray-400,
-.text-slate-500,
-.text-slate-400 {
-  color: #475569 !important; /* slate-600 */
-}
+/* --------- Shared UI helpers --------- */
 
-/* Inputs, tables, labels */
-input,
-select,
-textarea,
-label,
-th,
-td {
-  color: #1e293b !important; /* slate-800 */
-}
-
-/* Sidebar helpers (used in AdminLayout) */
+/* Sidebar link helpers (used in AdminLayout) */
 .sidebar-link {
   color: #e2e8f0; /* slate-200 */
 }
@@ -49,42 +31,191 @@ td {
 
 /* Generic card styling */
 .card {
-  @apply rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm;
+  @apply rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-4 shadow-sm;
 }
 
 .card-amber {
-  @apply border-amber-200 bg-amber-50;
+  @apply border-amber-300 bg-amber-50 text-amber-900;
 }
 
 .card-label {
-  @apply text-xs font-medium uppercase tracking-wide text-slate-500;
+  @apply text-xs font-medium uppercase tracking-wide text-slate-400;
 }
 
 .card-value {
-  @apply mt-2 text-2xl font-semibold text-slate-900;
+  @apply mt-2 text-2xl font-semibold text-slate-50;
 }
 
 .card-sub {
-  @apply mt-1 text-xs text-slate-500;
+  @apply mt-1 text-xs text-slate-400;
 }
 
-/* Table helpers */
-.table-head-cell {
-  @apply px-3 py-2 text-left;
+/* ------------------------------------------------------------------ */
+/* PREMIUM DARK TABLES (Payroll, Shifts, Analytics)                    */
+/* ------------------------------------------------------------------ */
+
+/* Put .admin-table on the <table> element */
+.admin-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: rgba(15, 23, 42, 0.98); /* very dark slate */
+  border-radius: 0.9rem;
+  overflow: hidden;
+  color: #e5e7eb; /* gray-200 / readable */
+  font-size: 0.875rem; /* text-sm-ish */
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.9),
+    0 22px 50px rgba(15, 23, 42, 0.95);
 }
 
-.table-cell {
-  @apply px-3 py-2 align-middle;
+/* Header row */
+.admin-table thead {
+  background: radial-gradient(circle at top left, #111827, #020617);
 }
 
-/* Make admin page background feel more "app-like" */
-html,
-body {
-  background-color: #020617; /* slate-950 baseline; main area overrides */
+.admin-table thead th {
+  padding: 0.65rem 1rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-align: left;
+  color: #e5e7eb; /* bright header text */
+  border-bottom: 1px solid rgba(31, 41, 55, 0.9); /* slate-800 */
+  white-space: nowrap;
+}
+
+/* Body cells */
+.admin-table tbody td {
+  padding: 0.6rem 1rem;
+  font-size: 0.875rem; /* keep consistent with table base */
+  color: #e5e7eb;
+  border-top: 1px solid rgba(15, 23, 42, 0.95);
+}
+
+/* Zebra striping */
+.admin-table tbody tr:nth-child(odd) {
+  background: rgba(15, 23, 42, 0.98);
+}
+
+.admin-table tbody tr:nth-child(even) {
+  background: rgba(15, 23, 42, 0.94);
+}
+
+/* Hover state: subtle lift + amber accent on the left edge */
+.admin-table tbody tr {
+  transition:
+    background-color 120ms ease-out,
+    box-shadow 120ms ease-out,
+    transform 80ms ease-out;
+}
+
+.admin-table tbody tr:hover {
+  background: radial-gradient(circle at top left, #111827, #020617);
+  box-shadow:
+    inset 3px 0 0 #facc15, /* amber-400 strip */
+    0 18px 40px rgba(15, 23, 42, 0.9);
+  transform: translateY(-1px);
+}
+
+/* Right-align numeric columns when you add .table-num to th/td */
+.admin-table th.table-num,
+.admin-table td.table-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Slightly muted secondary text inside tables when needed */
+.admin-table .text-muted {
+  color: #9ca3af; /* gray-400 */
 }
 
 /* Keep your map / Leaflet container from shrinking oddly */
 .leaflet-container {
   border-radius: 0.75rem;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #1e293b; /* slate-800 */
+}
+
+/* --- Premium form controls for dark admin UI ------------------------- */
+
+/* Base: all text inputs, selects, textareas (but not checkboxes/radios) */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  color: #f9fafb !important;               /* almost white text */
+  background: radial-gradient(circle at top left, #111827, #020617);
+  border-radius: 0.75rem;                  /* rounded-xl */
+  border: 1px solid #1f2937;               /* slate-800 border */
+  padding: 0.65rem 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.9),       /* subtle frame */
+    0 18px 40px rgba(15, 23, 42, 0.85);    /* deep drop shadow */
+
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out,
+    background-color 120ms ease-out,
+    transform 80ms ease-out;
+}
+
+/* Hover: slight lift + brighter border */
+input:not([type="checkbox"]):not([type="radio"]):hover,
+select:hover,
+textarea:hover {
+  border-color: #38bdf8;                   /* sky-400 */
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.35),
+    0 24px 50px rgba(15, 23, 42, 0.95);
+  transform: translateY(-1px);
+}
+
+/* Focus: strong amber ring + crisp border */
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  outline: none !important;
+  border-color: #facc15;                   /* amber-400 */
+  box-shadow:
+    0 0 0 1px rgba(250, 204, 21, 0.7),
+    0 0 0 3px rgba(250, 204, 21, 0.18),
+    0 24px 55px rgba(15, 23, 42, 0.98);
+}
+
+/* Placeholder text: readable but clearly secondary */
+input::placeholder,
+textarea::placeholder {
+  color: #9ca3af !important;               /* gray-400 */
+}
+
+/* Disabled / read-only: flatten the elevation and dim slightly */
+input:disabled,
+select:disabled,
+textarea:disabled,
+input[readonly],
+textarea[readonly] {
+  background: #020617;
+  border-color: #1f2937;
+  color: #6b7280 !important;               /* gray-500 */
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Labels: crisp and slightly brighter for dark UI */
+label {
+  color: #e5e7eb !important;               /* gray-200 */
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Error text under fields (like your “did not match pattern” message) */
+.text-error,
+.text-error * {
+  color: #f97373 !important;               /* soft red */
+  font-weight: 500;
 }

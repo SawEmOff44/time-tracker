@@ -88,7 +88,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Payroll &amp; Shifts</h1>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-slate-300">
             Review recorded shifts and export to CSV for payroll.
           </p>
         </div>
@@ -107,7 +107,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
         className="mb-4 flex flex-col md:flex-row md:items-end gap-3"
       >
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">
+          <label className="block text-xs font-semibold text-slate-200 mb-1">
             Start Date
           </label>
           <input
@@ -119,7 +119,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-gray-700 mb-1">
+          <label className="block text-xs font-semibold text-slate-200 mb-1">
             End Date
           </label>
           <input
@@ -140,7 +140,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
           {(startParam || endParam) && (
             <a
               href="/admin/payroll"
-              className="px-3 py-2 rounded border text-xs font-semibold text-gray-700 bg-white hover:bg-gray-50"
+              className="px-3 py-2 rounded border text-xs font-semibold text-slate-200 bg-slate-900 hover:bg-slate-950"
             >
               Clear
             </a>
@@ -150,15 +150,15 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
 
       {/* Summary */}
       <div className="mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-slate-200">
           <span className="font-semibold">Total Shifts:</span> {rows.length}
         </div>
-        <div className="text-sm text-gray-700">
+        <div className="text-sm text-slate-200">
           <span className="font-semibold">Total Hours:</span>{" "}
           {totalHours.toFixed(2)}
         </div>
         {startParam || endParam ? (
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-slate-400">
             Filtered by{" "}
             {startParam && (
               <>
@@ -175,9 +175,9 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto border rounded-lg bg-white">
+      <div className="overflow-x-auto border rounded-lg bg-slate-900">
         <table className="min-w-full text-sm">
-          <thead className="bg-gray-100 border-b">
+          <thead className="bg-slate-900 border-b">
             <tr>
               <th className="px-3 py-2 text-left font-semibold">Employee</th>
               <th className="px-3 py-2 text-left font-semibold">Code</th>
@@ -193,7 +193,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
               <tr>
                 <td
                   colSpan={7}
-                  className="px-3 py-6 text-center text-gray-500"
+                  className="px-3 py-6 text-center text-slate-400"
                 >
                   No shifts found for this period.
                 </td>
@@ -202,7 +202,7 @@ export default async function PayrollPage({ searchParams }: PayrollPageProps) {
               rows.map((r) => (
                 <tr
                   key={r.id}
-                  className="border-b last:border-b-0 hover:bg-gray-50"
+                  className="border-b last:border-b-0 hover:bg-slate-950"
                 >
                   <td className="px-3 py-2">{r.employee}</td>
                   <td className="px-3 py-2">{r.code}</td>

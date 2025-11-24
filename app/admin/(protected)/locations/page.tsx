@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 const LocationMap = dynamic(() => import("./LocationMap"), {
   ssr: false,
   loading: () => (
-    <div className="text-sm text-gray-500">Loading map…</div>
+    <div className="text-sm text-slate-400">Loading map…</div>
   ),
 });
 
@@ -235,8 +235,8 @@ export default function LocationsAdminPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-gray-900">Locations</h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <h1 className="text-2xl font-semibold text-slate-100">Locations</h1>
+        <p className="mt-1 text-sm text-slate-400">
           Manage job sites and GPS radiuses. Click the map to fine-tune
           coordinates.
         </p>
@@ -251,18 +251,18 @@ export default function LocationsAdminPage() {
       {/* Layout: form + map */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* FORM CARD */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-100">
             {editingId ? "Edit location" : "Create location"}
           </h2>
-          <p className="mt-1 text-xs text-gray-500">
+          <p className="mt-1 text-xs text-slate-400">
             Name, code, and coordinates are required. Radius 0 marks this as an
             ADHOC bucket.
           </p>
 
           <form onSubmit={handleSave} className="mt-4 space-y-4">
             <div>
-              <label className="block text-xs font-medium text-gray-700">
+              <label className="block text-xs font-medium text-slate-200">
                 Name
               </label>
               <input
@@ -274,7 +274,7 @@ export default function LocationsAdminPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-700">
+              <label className="block text-xs font-medium text-slate-200">
                 Code
               </label>
               <input
@@ -287,7 +287,7 @@ export default function LocationsAdminPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-700">
+                <label className="block text-xs font-medium text-slate-200">
                   Latitude
                 </label>
                 <input
@@ -303,7 +303,7 @@ export default function LocationsAdminPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-700">
+                <label className="block text-xs font-medium text-slate-200">
                   Longitude
                 </label>
                 <input
@@ -321,7 +321,7 @@ export default function LocationsAdminPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-700">
+              <label className="block text-xs font-medium text-slate-200">
                 Radius (meters)
               </label>
               <input
@@ -335,7 +335,7 @@ export default function LocationsAdminPage() {
                 }
                 min={0}
               />
-              <p className="mt-1 text-[11px] text-gray-500">
+              <p className="mt-1 text-[11px] text-slate-400">
                 Set to <strong>0</strong> to mark this as an ADHOC bucket
                 (no GPS radius check).
               </p>
@@ -345,13 +345,13 @@ export default function LocationsAdminPage() {
               <input
                 id="loc-active"
                 type="checkbox"
-                className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+                className="h-4 w-4 rounded border-gray-300 text-slate-100 focus:ring-gray-900"
                 checked={active}
                 onChange={(e) => setActive(e.target.checked)}
               />
               <label
                 htmlFor="loc-active"
-                className="text-xs font-medium text-gray-700"
+                className="text-xs font-medium text-slate-200"
               >
                 Active job site
               </label>
@@ -375,7 +375,7 @@ export default function LocationsAdminPage() {
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="text-xs text-gray-500 hover:text-gray-800"
+                  className="text-xs text-slate-400 hover:text-slate-100"
                 >
                   Cancel edit
                 </button>
@@ -384,11 +384,11 @@ export default function LocationsAdminPage() {
           </form>
 
           {/* Geocode helper */}
-          <div className="mt-6 border-t border-gray-100 pt-4">
-            <p className="text-xs font-semibold text-gray-700">
+          <div className="mt-6 border-t border-slate-800 pt-4">
+            <p className="text-xs font-semibold text-slate-200">
               Coordinate lookup
             </p>
-            <p className="mt-1 text-[11px] text-gray-500">
+            <p className="mt-1 text-[11px] text-slate-400">
               Paste an address or place name and we&apos;ll try to look up
               coordinates. You can then fine-tune by clicking the map.
             </p>
@@ -406,7 +406,7 @@ export default function LocationsAdminPage() {
               <button
                 type="submit"
                 disabled={geocodeLoading}
-                className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-60"
+                className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-slate-900 px-3 py-1.5 text-sm font-medium text-slate-200 shadow-sm hover:bg-slate-950 disabled:opacity-60"
               >
                 {geocodeLoading ? "Looking up..." : "Lookup"}
               </button>
@@ -419,13 +419,13 @@ export default function LocationsAdminPage() {
         </div>
 
         {/* MAP CARD */}
-        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4 shadow-sm">
           <div className="mb-2 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-gray-900">
+              <h2 className="text-sm font-semibold text-slate-100">
                 Location map
               </h2>
-              <p className="text-[11px] text-gray-500">
+              <p className="text-[11px] text-slate-400">
                 Click anywhere on the map to set the coordinates. Radius circle
                 shows the GPS check area.
               </p>
@@ -447,46 +447,46 @@ export default function LocationsAdminPage() {
       </div>
 
       {/* EXISTING LOCATIONS TABLE */}
-      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
-          <h2 className="text-sm font-semibold text-gray-900">
+      <div className="rounded-xl border border-slate-800 bg-slate-900 shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
+          <h2 className="text-sm font-semibold text-slate-100">
             Existing locations
           </h2>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-slate-400">
             Click &quot;Edit&quot; to load into the form.
           </p>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-100 text-sm">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-slate-800 text-sm">
+            <thead className="bg-slate-950">
               <tr>
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                   Name
                 </th>
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                   Code
                 </th>
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                   Coords
                 </th>
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                   Radius
                 </th>
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                   Status
                 </th>
-                <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-gray-500">
+                <th className="px-4 py-2 text-right text-xs font-medium uppercase tracking-wide text-slate-400">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
+            <tbody className="divide-y divide-slate-800 bg-slate-900">
               {loading && (
                 <tr>
                   <td
                     colSpan={6}
-                    className="px-4 py-6 text-center text-sm text-gray-400"
+                    className="px-4 py-6 text-center text-sm text-slate-500"
                   >
                     Loading locations…
                   </td>
@@ -497,7 +497,7 @@ export default function LocationsAdminPage() {
                 <tr>
                   <td
                     colSpan={6}
-                    className="px-4 py-6 text-center text-sm text-gray-400"
+                    className="px-4 py-6 text-center text-sm text-slate-500"
                   >
                     No locations yet. Create one on the left.
                   </td>
@@ -508,19 +508,19 @@ export default function LocationsAdminPage() {
                 const isAdhoc = loc.radiusMeters === 0;
                 return (
                   <tr key={loc.id}>
-                    <td className="px-4 py-2 align-top text-gray-900">
+                    <td className="px-4 py-2 align-top text-slate-100">
                       {loc.name}
                     </td>
-                    <td className="px-4 py-2 align-top text-gray-700">
+                    <td className="px-4 py-2 align-top text-slate-200">
                       {loc.code}
                     </td>
-                    <td className="px-4 py-2 align-top text-gray-700 text-xs">
+                    <td className="px-4 py-2 align-top text-slate-200 text-xs">
                       {loc.lat.toFixed(6)}, {loc.lng.toFixed(6)}
                     </td>
-                    <td className="px-4 py-2 align-top text-gray-700 text-xs">
+                    <td className="px-4 py-2 align-top text-slate-200 text-xs">
                       {loc.radiusMeters ?? 0} m{" "}
                       {isAdhoc && (
-                        <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                        <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                           ADHOC
                         </span>
                       )}
@@ -530,7 +530,7 @@ export default function LocationsAdminPage() {
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
                           loc.active
                             ? "bg-emerald-50 text-emerald-700"
-                            : "bg-gray-100 text-gray-500"
+                            : "bg-slate-900 text-slate-400"
                         }`}
                       >
                         {loc.active ? "Active" : "Inactive"}
@@ -539,7 +539,7 @@ export default function LocationsAdminPage() {
                     <td className="px-4 py-2 align-top text-right text-xs">
                       <button
                         onClick={() => startEdit(loc)}
-                        className="mr-2 inline-flex items-center rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                        className="mr-2 inline-flex items-center rounded-md border border-slate-800 px-2 py-1 text-xs font-medium text-slate-200 hover:bg-slate-950"
                       >
                         Edit
                       </button>

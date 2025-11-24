@@ -252,8 +252,8 @@ export default function AdminShiftsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900">Shifts</h1>
-        <p className="text-sm text-gray-500">
+        <h1 className="text-xl font-semibold text-slate-100">Shifts</h1>
+        <p className="text-sm text-slate-400">
           Review and audit clock-in / clock-out activity.
         </p>
       </div>
@@ -262,7 +262,7 @@ export default function AdminShiftsPage() {
       <div className="flex flex-wrap items-center gap-3 justify-between">
         <div className="flex flex-wrap gap-3">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">
               Filter by employee
             </label>
             <input
@@ -275,7 +275,7 @@ export default function AdminShiftsPage() {
           </div>
 
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">
+            <label className="block text-xs font-medium text-slate-400 mb-1">
               Filter by location
             </label>
             <input
@@ -287,7 +287,7 @@ export default function AdminShiftsPage() {
             />
           </div>
 
-          <label className="inline-flex items-center text-xs text-gray-600 mt-5">
+          <label className="inline-flex items-center text-xs text-slate-300 mt-5">
             <input
               type="checkbox"
               className="mr-1"
@@ -301,7 +301,7 @@ export default function AdminShiftsPage() {
         <div className="flex gap-2 mt-5 sm:mt-0">
           <button
             onClick={loadShifts}
-            className="px-3 py-1.5 text-sm border rounded bg-white hover:bg-gray-50"
+            className="px-3 py-1.5 text-sm border rounded bg-slate-900 hover:bg-slate-950"
           >
             Refresh
           </button>
@@ -321,10 +321,10 @@ export default function AdminShiftsPage() {
       )}
 
       {/* Shifts table */}
-      <div className="overflow-x-auto rounded-md border border-gray-200 bg-white">
+      <div className="overflow-x-auto rounded-md border border-slate-800 bg-slate-900">
         <table className="min-w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr className="text-left text-xs font-semibold text-gray-500">
+          <thead className="bg-slate-950">
+            <tr className="text-left text-xs font-semibold text-slate-400">
               <th className="px-4 py-2">Employee</th>
               <th className="px-4 py-2">Location</th>
               <th className="px-4 py-2">Clock in</th>
@@ -340,7 +340,7 @@ export default function AdminShiftsPage() {
               <tr>
                 <td
                   colSpan={8}
-                  className="px-4 py-6 text-center text-gray-500 text-sm"
+                  className="px-4 py-6 text-center text-slate-400 text-sm"
                 >
                   Loading shifts…
                 </td>
@@ -351,7 +351,7 @@ export default function AdminShiftsPage() {
               <tr>
                 <td
                   colSpan={8}
-                  className="px-4 py-6 text-center text-gray-500 text-sm"
+                  className="px-4 py-6 text-center text-slate-400 text-sm"
                 >
                   No shifts found.
                 </td>
@@ -375,14 +375,14 @@ export default function AdminShiftsPage() {
                 return (
                   <tr
                     key={shift.id}
-                    className="border-t border-gray-100 text-xs text-gray-800"
+                    className="border-t border-slate-800 text-xs text-slate-100"
                   >
                     <td className="px-4 py-2 align-top">
-                      <div className="font-medium text-gray-900">
+                      <div className="font-medium text-slate-100">
                         {empName}
                       </div>
                       {empCode && (
-                        <div className="text-[11px] text-gray-500">
+                        <div className="text-[11px] text-slate-400">
                           {empCode}
                         </div>
                       )}
@@ -399,11 +399,11 @@ export default function AdminShiftsPage() {
                     </td>
                     <td className="px-4 py-2 align-top">
                       {isAdhoc ? (
-                        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                        <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-200">
                           ADHOC
                         </span>
                       ) : (
-                        <span className="text-[11px] text-gray-400">—</span>
+                        <span className="text-[11px] text-slate-500">—</span>
                       )}
                     </td>
                     <td className="px-4 py-2 align-top">
@@ -417,7 +417,7 @@ export default function AdminShiftsPage() {
                           View
                         </a>
                       ) : (
-                        <span className="text-[11px] text-gray-400">—</span>
+                        <span className="text-[11px] text-slate-500">—</span>
                       )}
                     </td>
                     <td className="px-4 py-2 align-top text-right space-x-2">
@@ -444,14 +444,14 @@ export default function AdminShiftsPage() {
       {/* Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
-          <div className="w-full max-w-3xl rounded-lg bg-white shadow-lg">
+          <div className="w-full max-w-3xl rounded-lg bg-slate-900 shadow-lg">
             <div className="flex items-center justify-between border-b px-5 py-3">
-              <h2 className="text-sm font-semibold text-gray-900">
+              <h2 className="text-sm font-semibold text-slate-100">
                 {modalMode === "create" ? "Create manual shift" : "Edit shift"}
               </h2>
               <button
                 onClick={closeModal}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                className="text-slate-500 hover:text-slate-300 text-xl leading-none"
               >
                 ×
               </button>
@@ -466,7 +466,7 @@ export default function AdminShiftsPage() {
             <div className="px-5 py-4 space-y-4 text-sm">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
                     Employee
                   </label>
                   <select
@@ -485,7 +485,7 @@ export default function AdminShiftsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
                     Location
                   </label>
                   <select
@@ -507,7 +507,7 @@ export default function AdminShiftsPage() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
                     Clock in
                   </label>
                   <input
@@ -518,7 +518,7 @@ export default function AdminShiftsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                  <label className="block text-xs font-medium text-slate-300 mb-1">
                     Clock out
                   </label>
                   <input
@@ -527,7 +527,7 @@ export default function AdminShiftsPage() {
                     value={formClockOut}
                     onChange={(e) => setFormClockOut(e.target.value)}
                   />
-                  <p className="mt-1 text-[11px] text-gray-500">
+                  <p className="mt-1 text-[11px] text-slate-400">
                     Leave blank to clear clock-out.
                   </p>
                 </div>
@@ -537,7 +537,7 @@ export default function AdminShiftsPage() {
             <div className="flex justify-end gap-2 border-t px-5 py-3">
               <button
                 onClick={closeModal}
-                className="px-3 py-1.5 text-xs border rounded bg-white hover:bg-gray-50"
+                className="px-3 py-1.5 text-xs border rounded bg-slate-900 hover:bg-slate-950"
                 disabled={saving}
               >
                 Cancel

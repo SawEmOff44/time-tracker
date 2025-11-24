@@ -1,13 +1,22 @@
+// app/api/admin/logout/route.ts
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 export async function POST() {
-  const res = NextResponse.json({ ok: true });
+  const cookieStore = cookies();
 
-  res.cookies.set("admin_session", "", {
-    httpOnly: true,
-    path: "/",
-    expires: new Date(0),
-  });
+  // Clear a few likely cookie names, harmless if they don't exist
+  const cookieNames = ["admin_session", "adminAuth", "admin_token"];
 
-  return res;
+  for (const name of cookieNames) {
+    cookieStore.set(name, "", {
+      path: "/",
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 0,
+    });
+  }
+
+  return NextResponse.json({ ok: true });
 }
