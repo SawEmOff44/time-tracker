@@ -16,59 +16,93 @@ enum Role {
 }
 
 model User {
-  id            String   @id @default(cuid())
-  name          String
-  employeeCode  String?  @unique
-  role          Role     @default(EMPLOYEE)
-  email         String?
-  pinHash       String?
-  active        Boolean  @default(true)
+  id           String  @id @default(cuid())
+  name         String
+  employeeCode String? @unique
+  role         Role    @default(EMPLOYEE)
+  email        String?
+  pinHash      String?
+  active       Boolean @default(true)
 
   defaultLocationId String?
   defaultLocation   Location? @relation("UserDefaultLocation", fields: [defaultLocationId], references: [id])
 
-  shifts       Shift[]
+  shifts                  Shift[]
+  shiftCorrectionRequests ShiftCorrectionRequest[]
 
-  createdAt    DateTime @default(now())
-  // REMOVE this line if present:
-  // updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
 }
 
 model Location {
-  id           String   @id @default(cuid())
+  id           String  @id @default(cuid())
   name         String
-  code         String   @unique
+  code         String  @unique
   lat          Float
   lng          Float
   radiusMeters Float
-  active       Boolean  @default(true)
+  active       Boolean @default(true)
 
   shifts       Shift[]
-  defaultUsers User[]   @relation("UserDefaultLocation")
+  defaultUsers User[]  @relation("UserDefaultLocation")
 
-  createdAt    DateTime @default(now())
-  // REMOVE: updatedAt
+  createdAt DateTime @default(now())
 }
 
 model Shift {
-  id          String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  userId      String
-  locationId  String?
+  userId     String
+  locationId String?
 
-  clockIn     DateTime
-  clockOut    DateTime?
+  clockIn  DateTime
+  clockOut DateTime?
 
-  clockInLat   Float?
-  clockInLng   Float?
-  clockOutLat  Float?
-  clockOutLng  Float?
+  clockInLat  Float?
+  clockInLng  Float?
+  clockOutLat Float?
+  clockOutLng Float?
 
-  notes       String?
+  notes String?
 
-  user        User      @relation(fields: [userId], references: [id])
-  location    Location? @relation(fields: [locationId], references: [id])
+  user     User      @relation(fields: [userId], references: [id])
+  location Location? @relation(fields: [locationId], references: [id])
 
-  createdAt   DateTime @default(now())
-  // REMOVE: updatedAt
+  correctionRequests ShiftCorrectionRequest[]
+
+  createdAt DateTime @default(now())
+}
+
+enum ShiftCorrectionType {
+  MISSING_IN
+  MISSING_OUT
+  ADJUST_IN
+  ADJUST_OUT
+  NEW_SHIFT
+}
+
+enum CorrectionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ShiftCorrectionRequest {
+  id String @id @default(cuid())
+
+  user   User   @relation(fields: [userId], references: [id])
+  userId String
+
+  // Optional link to the original shift (e.g., for adjusting in/out)
+  shift   Shift?  @relation(fields: [shiftId], references: [id])
+  shiftId String?
+
+  type              ShiftCorrectionType
+  requestedClockIn  DateTime?
+  requestedClockOut DateTime?
+  reason            String?
+
+  status CorrectionStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
