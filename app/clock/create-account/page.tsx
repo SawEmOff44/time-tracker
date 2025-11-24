@@ -2,40 +2,44 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 
-type Status = "idle" | "submitting" | "success" | "error";
+type RegisterResponse = {
+  message?: string;
+  error?: string;
+};
 
 export default function CreateAccountPage() {
-  const router = useRouter();
-
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
+  const [email, setEmail] = useState("");
   const [pin, setPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
 
-  const [status, setStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [status, setStatus] = useState<RegisterResponse | null>(null);
+
+  const hasMismatch = pin !== confirmPin && confirmPin.length > 0;
+
+  const canSubmit =
+    !!name &&
+    !!employeeCode &&
+    !!pin &&
+    !!confirmPin &&
+    !hasMismatch &&
+    !submitting;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setStatus("submitting");
-    setMessage(null);
+    if (!canSubmit) return;
 
-    if (pin !== confirmPin) {
-      setStatus("error");
-      setMessage("PIN and confirmation do not match.");
-      return;
-    }
+    setSubmitting(true);
+    setStatus(null);
 
     try {
-      const res = await fetch("/api/public/register", {
+      const res = await fetch("/api/clock/register", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
           email,
@@ -44,144 +48,153 @@ export default function CreateAccountPage() {
         }),
       });
 
-      const data = (await res.json()) as { error?: string; message?: string };
+      const data = (await res.json()) as RegisterResponse;
 
       if (!res.ok) {
-        setStatus("error");
-        setMessage(data.error ?? "Unable to create account.");
-        return;
+        setStatus({
+          error: data.error || "Could not create account.",
+        });
+      } else {
+        setStatus({
+          message:
+            data.message ??
+            "Account created. A supervisor must approve you before you can clock in.",
+        });
+        // Lock fields after success so people don't spam it
+        // but keep the values visible.
       }
-
-      setStatus("success");
-      setMessage(
-        data.message ??
-          "Account created. You can now use your ID and PIN to clock in."
-      );
-
-      // Small delay then send them back to clock page
-      setTimeout(() => {
-        router.push("/clock");
-      }, 1500);
     } catch (err) {
       console.error(err);
-      setStatus("error");
-      setMessage("Unexpected error talking to the server.");
+      setStatus({ error: "Unexpected error creating account." });
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  const isSubmitting = status === "submitting";
+  const messageColor = status?.error ? "text-red-400" : "text-emerald-300";
 
   return (
     <div className="min-h-screen flex items-center justify-center clock-stone-bg">
-      <div className="w-full max-w-md bg-slate-950/70 backdrop-blur-xl rounded-3xl border border-white/10 shadow-[0_35px_60px_rgba(0,0,0,0.6)] p-1">
-        {/* Inner frosted panel */}
-        <div className="bg-slate-900/80 rounded-3xl p-8 shadow-inner border border-white/5">
-          <h1 className="text-xl font-semibold text-slate-50 text-center mb-2">
-            Create Worker Account
-          </h1>
-          <p className="text-xs text-slate-300 text-center mb-6">
-            Use this form once per worker to set up their own login.
-            Afterwards they&apos;ll clock in using their ID and PIN on the main
-            screen.
-          </p>
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label>Full name</label>
-              <input
-                type="text"
-                className="w-full mt-1"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. William Skiles"
-                required
-              />
-            </div>
-
-            <div>
-              <label>Email</label>
-              <input
-                type="email"
-                className="w-full mt-1"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                required
-              />
-            </div>
-
-            <div>
-              <label>Employee ID</label>
-              <input
-                type="text"
-                className="w-full mt-1"
-                value={employeeCode}
-                onChange={(e) =>
-                  setEmployeeCode(e.target.value.toUpperCase())
-                }
-                placeholder="e.g. WILL001"
-                required
-              />
-              <p className="mt-1 text-[11px] text-slate-400">
-                Workers will type this ID on the clock screen instead of
-                their name.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label>PIN</label>
-                <input
-                  type="password"
-                  className="w-full mt-1"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="4–6 digits"
-                  required
-                />
-              </div>
-              <div>
-                <label>Confirm PIN</label>
-                <input
-                  type="password"
-                  className="w-full mt-1"
-                  value={confirmPin}
-                  onChange={(e) => setConfirmPin(e.target.value)}
-                  placeholder="repeat PIN"
-                  required
-                />
-              </div>
-            </div>
-
-            {message && (
-              <p
-                className={`mt-2 text-xs text-center ${
-                  status === "success" ? "text-emerald-300" : "text-red-300"
-                }`}
-              >
-                {message}
-              </p>
-            )}
-
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="mt-3 w-full py-3 rounded-xl bg-emerald-500 text-slate-950 font-semibold text-sm tracking-wide hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed transition"
-            >
-              {isSubmitting ? "Creating account…" : "Create account"}
-            </button>
-          </form>
-
-          <p className="mt-6 text-xs text-slate-400 text-center">
-            Already have an ID and PIN?{" "}
-            <Link
-              href="/clock"
-              className="text-amber-300 hover:text-amber-200 underline underline-offset-4"
-            >
-              Go back to clock in
-            </Link>
-          </p>
+      <div className="w-full max-w-xl rounded-3xl bg-slate-950/80 shadow-[0_40px_120px_rgba(15,23,42,0.95)] border border-slate-700/70 backdrop-blur-xl px-8 py-8 sm:px-10 sm:py-10">
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-lg sm:text-xl font-semibold text-slate-50">
+              Create your worker account
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300 mt-1">
+              Your supervisor will review and approve you before you can clock
+              in.
+            </p>
+          </div>
+          <Link
+            href="/clock"
+            className="text-xs font-medium text-slate-300 hover:text-slate-100 underline underline-offset-4"
+          >
+            Back to clock
+          </Link>
         </div>
+
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+              Full name
+            </label>
+            <input
+              type="text"
+              placeholder="Jane Doe"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="mt-1 w-full"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+              Employee code
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. ALI001"
+              value={employeeCode}
+              onChange={(e) => setEmployeeCode(e.target.value.toUpperCase())}
+              className="mt-1 w-full"
+              required
+            />
+            <p className="mt-1 text-[11px] text-slate-400">
+              This is the code you&apos;ll use to clock in.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+              Email (optional)
+            </label>
+            <input
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full"
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                PIN
+              </label>
+              <input
+                type="password"
+                placeholder="4–8 digits"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                className="mt-1 w-full"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
+                Confirm PIN
+              </label>
+              <input
+                type="password"
+                placeholder="Re-enter PIN"
+                value={confirmPin}
+                onChange={(e) => setConfirmPin(e.target.value)}
+                className="mt-1 w-full"
+                required
+              />
+              {hasMismatch && (
+                <p className="mt-1 text-[11px] text-red-400">
+                  PINs do not match.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="w-full py-3 rounded-xl font-semibold bg-amber-400 text-slate-950 hover:bg-amber-300 disabled:opacity-60 disabled:cursor-not-allowed transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-300 focus:ring-offset-slate-950"
+          >
+            {submitting ? "Creating account…" : "Create account"}
+          </button>
+        </form>
+
+        {status && (
+          <p className={`mt-4 text-xs sm:text-sm text-center ${messageColor}`}>
+            {status.error ?? status.message}
+          </p>
+        )}
+
+        {!status?.error && (
+          <p className="mt-3 text-[11px] text-slate-400 text-center">
+            Once approved, use your employee code & PIN on the main clock page
+            to start tracking time.
+          </p>
+        )}
       </div>
     </div>
   );

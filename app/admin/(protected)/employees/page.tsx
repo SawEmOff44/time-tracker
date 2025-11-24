@@ -1,324 +1,292 @@
+// app/admin/(protected)/employees/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 
-type Employee = {
+type AdminUser = {
   id: string;
   name: string;
-  employeeCode: string;
-  role: string;
+  email: string | null;
+  employeeCode: string | null;
   active: boolean;
-  pin?: string | null;
+  createdAt: string; // serialized from API
 };
 
-type NewEmployeePayload = {
-  name: string;
-  employeeCode: string;
-  role: string;
-  pin?: string;
-};
-
-export default function EmployeesPage() {
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loading, setLoading] = useState(false);
+export default function AdminEmployeesPage() {
+  const [employees, setEmployees] = useState<AdminUser[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actingId, setActingId] = useState<string | null>(null);
 
-  const [name, setName] = useState("");
-  const [employeeCode, setEmployeeCode] = useState("");
-  const [role, setRole] = useState<"WORKER" | "ADMIN">("WORKER");
-  const [pin, setPin] = useState("");
-
-  const [saving, setSaving] = useState(false);
-
-  // Load employees on mount
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadEmployees() {
-      setLoading(true);
-      setError(null);
+    async function load() {
       try {
+        setLoading(true);
+        setError(null);
         const res = await fetch("/api/admin/employees");
         if (!res.ok) {
           throw new Error("Failed to load employees");
         }
-        const data = (await res.json()) as Employee[];
-        if (!cancelled) {
-          setEmployees(data.sort(sortEmployees));
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err.message || "Failed to load employees");
-        }
+        const data = (await res.json()) as AdminUser[];
+        setEmployees(data);
+      } catch (err) {
+        console.error(err);
+        setError("Could not load employees.");
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     }
 
-    loadEmployees();
-    return () => {
-      cancelled = true;
-    };
+    load();
   }, []);
 
-  async function handleCreateEmployee(e: React.FormEvent) {
-    e.preventDefault();
-    setSaving(true);
-    setError(null);
+  const pending = employees.filter((u) => !u.active);
+  const active = employees.filter((u) => u.active);
 
-    const payload: NewEmployeePayload = {
-      name,
-      employeeCode,
-      role,
-    };
-
-    if (pin.trim()) {
-      payload.pin = pin.trim();
-    }
-
+  async function handleApprove(id: string) {
+    setActingId(id);
     try {
-      const res = await fetch("/api/admin/employees", {
+      const res = await fetch(`/api/admin/employees/${id}/approve`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
       });
-
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to create employee");
+        throw new Error("Approve failed");
       }
-
-      const created = (await res.json()) as Employee;
-
-      setEmployees((prev) => [...prev, created].sort(sortEmployees));
-
-      setName("");
-      setEmployeeCode("");
-      setRole("WORKER");
-      setPin("");
-    } catch (err: any) {
-      setError(err.message || "Failed to create employee");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function toggleActive(emp: Employee, active: boolean) {
-    setError(null);
-    try {
-      const res = await fetch(`/api/admin/employees/${emp.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active }),
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to update employee");
-      }
-
-      const updated = (await res.json()) as Employee;
-
+      const updated = (await res.json()) as AdminUser;
       setEmployees((prev) =>
-        prev
-          .map((e) => (e.id === updated.id ? updated : e))
-          .sort(sortEmployees)
+        prev.map((u) => (u.id === id ? { ...u, active: updated.active } : u))
       );
-    } catch (err: any) {
-      setError(err.message || "Failed to update employee");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to approve worker.");
+    } finally {
+      setActingId(null);
     }
   }
 
-  async function deleteEmployee(emp: Employee) {
-    setError(null);
-
-    const confirmed = window.confirm(
-      `Delete ${emp.name} (${emp.employeeCode})? This cannot be undone.`
-    );
-    if (!confirmed) return;
-
+  async function handleReject(id: string) {
+    if (!window.confirm("Reject and remove this pending worker?")) return;
+    setActingId(id);
     try {
-      const res = await fetch(`/api/admin/employees/${emp.id}`, {
+      const res = await fetch(`/api/admin/employees/${id}/reject`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        throw new Error("Reject failed");
+      }
+      setEmployees((prev) => prev.filter((u) => u.id !== id));
+    } catch (err) {
+      console.error(err);
+      alert("Failed to reject worker.");
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (
+      !window.confirm(
+        "Permanently delete this employee? This only works if they have no recorded shifts."
+      )
+    ) {
+      return;
+    }
+
+    setActingId(id);
+    try {
+      const res = await fetch(`/api/admin/employees/${id}`, {
         method: "DELETE",
       });
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
 
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.error || "Failed to delete employee");
+        alert(body.error ?? "Failed to delete employee.");
+        throw new Error("Delete failed");
       }
 
-      // Remove locally
-      setEmployees((prev) => prev.filter((e) => e.id !== emp.id));
-    } catch (err: any) {
-      setError(err.message || "Failed to delete employee");
+      setEmployees((prev) => prev.filter((u) => u.id !== id));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setActingId(null);
     }
-  }
-
-  function sortEmployees(a: Employee, b: Employee) {
-    return a.name.localeCompare(b.name);
   }
 
   return (
     <div className="space-y-8">
+      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold">Employees</h1>
-        <p className="mt-1 text-sm text-slate-300">
-          Manage employee records, roles, and PINs used for clocking in/out.
+        <h1 className="text-2xl font-semibold text-slate-50">Employees</h1>
+        <p className="mt-1 text-sm text-slate-400">
+          Manage workers, review pending accounts, and control who can clock in.
         </p>
       </div>
 
-      {/* Error banner */}
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
           {error}
         </div>
       )}
 
-      {/* Create employee form */}
-      <section className="rounded-lg bg-slate-900 p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Add New Employee</h2>
-
-        <form
-          onSubmit={handleCreateEmployee}
-          className="grid gap-4 md:grid-cols-4"
-        >
-          <div className="md:col-span-2">
-            <label className="mb-1 block text-sm font-medium">Name</label>
-            <input
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              placeholder="e.g. Alice Johnson"
-            />
-          </div>
-
+      {/* Pending workers */}
+      <div className="card border-amber-400/40 bg-slate-900/70">
+        <div className="flex items-center justify-between gap-4 mb-3">
           <div>
-            <label className="mb-1 block text-sm font-medium">
-              Employee Code
-            </label>
-            <input
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={employeeCode}
-              onChange={(e) => setEmployeeCode(e.target.value)}
-              required
-              placeholder="e.g. ALI001"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">Role</label>
-            <select
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={role}
-              onChange={(e) =>
-                setRole(e.target.value as "WORKER" | "ADMIN")
-              }
-            >
-              <option value="WORKER">Worker</option>
-              <option value="ADMIN">Admin</option>
-            </select>
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="mb-1 block text-sm font-medium">PIN</label>
-            <input
-              className="w-full rounded border px-2 py-1 text-sm"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="Optional – numeric PIN"
-            />
-            <p className="mt-1 text-xs text-slate-400">
-              This is the PIN the employee will use with their code to clock
-              in/out.
+            <h2 className="text-sm font-semibold text-amber-200">
+              Pending workers (awaiting approval)
+            </h2>
+            <p className="text-xs text-amber-100/80">
+              These accounts were created from the public clock page and cannot
+              clock in until approved.
             </p>
           </div>
-
-          <div className="flex items-end md:col-span-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded bg-black px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {saving ? "Saving..." : "Add Employee"}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      {/* Existing employees */}
-      <section className="rounded-lg bg-slate-900 p-4 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Existing Employees</h2>
-          {loading && (
-            <span className="text-xs text-slate-400">Loading…</span>
-          )}
+          <span className="rounded-full bg-amber-500/20 px-3 py-1 text-xs font-semibold text-amber-100">
+            {pending.length} pending
+          </span>
         </div>
 
-        {employees.length === 0 ? (
-          <p className="text-sm text-slate-400">
-            No employees found. Add one above to get started.
+        {loading && (
+          <p className="text-xs text-slate-300">Loading employees…</p>
+        )}
+
+        {!loading && pending.length === 0 && (
+          <p className="text-xs text-slate-400">
+            No pending workers right now. New self-registrations will appear
+            here.
           </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
+        )}
+
+        {!loading && pending.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="admin-table min-w-full text-xs">
               <thead>
-                <tr className="border-b bg-slate-950 text-xs font-semibold uppercase text-slate-400">
-                  <th className="px-2 py-2">Name</th>
-                  <th className="px-2 py-2">Code</th>
-                  <th className="px-2 py-2">Role</th>
-                  <th className="px-2 py-2">PIN</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2 text-right">Actions</th>
+                <tr className="border-b border-slate-700/80">
+                  <th className="px-3 py-2 text-left">Name</th>
+                  <th className="px-3 py-2 text-left">Employee code</th>
+                  <th className="px-3 py-2 text-left">Email</th>
+                  <th className="px-3 py-2 text-left">Requested</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {employees.map((emp) => (
-                  <tr key={emp.id} className="border-b last:border-0">
-                    <td className="px-2 py-2">{emp.name}</td>
-                    <td className="px-2 py-2 font-mono text-xs">
-                      {emp.employeeCode}
+                {pending.map((u) => (
+                  <tr key={u.id} className="border-b border-slate-800/80">
+                    <td className="px-3 py-2 align-middle">
+                      <div className="text-sm text-slate-50">
+                        {u.name || "Unnamed"}
+                      </div>
                     </td>
-                    <td className="px-2 py-2 text-xs">{emp.role}</td>
-                    <td className="px-2 py-2 font-mono text-xs">
-                      {emp.pin && emp.pin.trim().length > 0
-                        ? emp.pin
-                        : "—"}
+                    <td className="px-3 py-2 align-middle text-slate-200">
+                      {u.employeeCode ?? "—"}
                     </td>
-                    <td className="px-2 py-2">
-                      {emp.active ? (
-                        <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
-                          Active
-                        </span>
-                      ) : (
-                        <span className="rounded-full bg-slate-900 px-2 py-0.5 text-xs font-medium text-slate-400">
-                          Inactive
-                        </span>
-                      )}
+                    <td className="px-3 py-2 align-middle text-slate-300">
+                      {u.email ?? "—"}
                     </td>
-                    <td className="px-2 py-2 text-right space-x-3">
-                      {emp.active ? (
+                    <td className="px-3 py-2 align-middle text-slate-400">
+                      {new Date(u.createdAt).toLocaleString("en-US", {
+                        month: "2-digit",
+                        day: "2-digit",
+                        year: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </td>
+                    <td className="px-3 py-2 align-middle text-right">
+                      <div className="inline-flex gap-2">
                         <button
-                          onClick={() => toggleActive(emp, false)}
-                          className="text-xs text-orange-600 hover:underline"
+                          type="button"
+                          onClick={() => handleApprove(u.id)}
+                          disabled={actingId === u.id}
+                          className="rounded-full bg-emerald-500/90 px-3 py-1 text-[11px] font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-60"
                         >
-                          Deactivate
+                          {actingId === u.id ? "Approving…" : "Approve"}
                         </button>
-                      ) : (
                         <button
-                          onClick={() => toggleActive(emp, true)}
-                          className="text-xs text-green-700 hover:underline"
+                          type="button"
+                          onClick={() => handleReject(u.id)}
+                          disabled={actingId === u.id}
+                          className="rounded-full bg-red-500/80 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-red-400 disabled:opacity-60"
                         >
-                          Activate
+                          {actingId === u.id ? "Removing…" : "Reject"}
                         </button>
-                      )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Active employees */}
+      <div className="card bg-slate-900/70">
+        <div className="flex items-center justify-between gap-4 mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-100">
+              Active employees
+            </h2>
+            <p className="text-xs text-slate-400">
+              These workers can clock in and will appear in shifts & payroll.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-700/60 px-3 py-1 text-xs font-semibold text-slate-100">
+            {active.length} active
+          </span>
+        </div>
+
+        {loading && (
+          <p className="text-xs text-slate-300">Loading employees…</p>
+        )}
+
+        {!loading && active.length === 0 && (
+          <p className="text-xs text-slate-400">
+            No active employees yet. Approve pending workers above, or use your
+            existing admin tools to add employees manually.
+          </p>
+        )}
+
+        {!loading && active.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <table className="admin-table min-w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-700/80">
+                  <th className="px-3 py-2 text-left">Name</th>
+                  <th className="px-3 py-2 text-left">Employee code</th>
+                  <th className="px-3 py-2 text-left">Email</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {active.map((u) => (
+                  <tr key={u.id} className="border-b border-slate-800/80">
+                    <td className="px-3 py-2 align-middle">
+                      <div className="text-sm text-slate-50">
+                        {u.name || "Unnamed"}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 align-middle text-slate-200">
+                      {u.employeeCode ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 align-middle text-slate-300">
+                      {u.email ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 align-middle">
+                      <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-semibold text-emerald-300 border border-emerald-500/40">
+                        Can clock in
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 align-middle text-right">
                       <button
-                        onClick={() => deleteEmployee(emp)}
-                        className="text-xs text-red-600 hover:underline"
+                        type="button"
+                        onClick={() => handleDelete(u.id)}
+                        disabled={actingId === u.id}
+                        className="rounded-full bg-red-500/80 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-red-400 disabled:opacity-60"
                       >
-                        Delete
+                        {actingId === u.id ? "Deleting…" : "Delete"}
                       </button>
                     </td>
                   </tr>
@@ -327,7 +295,7 @@ export default function EmployeesPage() {
             </table>
           </div>
         )}
-      </section>
+      </div>
     </div>
   );
 }

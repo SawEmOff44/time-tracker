@@ -1,93 +1,41 @@
+// app/api/admin/employees/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function requireAdmin() {
-  const cookieStore = cookies();
-  const session = cookieStore.get("admin_session")?.value;
-  return !!session;
-}
+type Params = { params: { id: string } };
 
 // DELETE /api/admin/employees/:id
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  if (!requireAdmin()) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const id = params.id;
+export async function DELETE(_req: NextRequest, { params }: Params) {
+  const { id } = params;
 
   try {
-    // Delete all shifts tied to this user
-    await prisma.shift.deleteMany({
+    // Safety: don't nuke an employee that already has shifts
+    const shiftCount = await prisma.shift.count({
       where: { userId: id },
     });
 
-    // Delete user
-    await prisma.user.delete({
-      where: { id },
-    });
-
-    return NextResponse.json({ success: true });
-  } catch (err) {
-    console.error("Failed to delete employee:", err);
-    return NextResponse.json(
-      { error: "Failed to delete employee" },
-      { status: 500 }
-    );
-  }
-}
-
-// PATCH /api/admin/employees/:id
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  if (!requireAdmin()) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const id = params.id;
-
-  try {
-    const body = await req.json().catch(() => null);
-
-    if (!body) {
+    if (shiftCount > 0) {
       return NextResponse.json(
-        { error: "Invalid JSON body" },
+        {
+          error:
+            "Cannot delete an employee who already has recorded shifts. (Leave them active or set them inactive instead.)",
+        },
         { status: 400 }
       );
     }
 
-    const { name, employeeCode, role, active, pin } = body;
-
-    const data: any = {};
-
-    if (typeof name === "string") data.name = name;
-    if (typeof employeeCode === "string") data.employeeCode = employeeCode;
-    if (typeof role === "string") data.role = role;
-    if (typeof active === "boolean") data.active = active;
-
-    // Update PIN (stored as pinHash)
-    if (typeof pin === "string" && pin.trim() !== "") {
-      data.pinHash = pin;
-    }
-
-    const updated = await prisma.user.update({
+    await prisma.user.delete({
       where: { id },
-      data,
     });
 
-    return NextResponse.json(updated);
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("Employee update failed:", err);
+    console.error("Admin DELETE /employees/:id error:", err);
     return NextResponse.json(
-      { error: "Failed to update employee" },
+      { error: "Failed to delete employee." },
       { status: 500 }
     );
   }

@@ -12,13 +12,26 @@ body {
   padding: 0;
 }
 
-/* Dark shell background */
+/* Dark shell for admin */
 html,
 body {
   background-color: #020617; /* slate-950 */
 }
 
-/* -------- Sidebar link helpers -------- */
+/* ---------- CLOCK PAGE BACKGROUND ---------- */
+
+/* Stone texture background for the clock page wrapper.
+   Used on: <div className="... clock-stone-bg"> in app/clock/page.tsx  */
+.clock-stone-bg {
+  background-image: url("/stone-texture.jpeg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* ---------- Shared UI helpers ---------- */
+
+/* Sidebar link helpers (used in AdminLayout) */
 .sidebar-link {
   color: #e2e8f0; /* slate-200 */
 }
@@ -27,7 +40,7 @@ body {
   color: #0f172a; /* slate-900 on amber bg */
 }
 
-/* -------- Generic card styling -------- */
+/* Generic card styling */
 .card {
   @apply rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-4 shadow-sm;
 }
@@ -48,7 +61,7 @@ body {
   @apply mt-1 text-xs text-slate-400;
 }
 
-/* -------- Admin Table Styling -------- */
+/* Admin dark tables */
 .admin-table {
   @apply text-slate-100 text-xs;
 }
@@ -61,33 +74,35 @@ body {
   @apply text-slate-100;
 }
 
+/* Slightly muted secondary text inside tables when needed */
 .admin-table .text-muted {
   @apply text-slate-400;
 }
 
-/* Prevent Leaflet maps from shrinking */
+/* Keep your map / Leaflet container from shrinking oddly */
 .leaflet-container {
   border-radius: 0.75rem;
   border: 1px solid #1e293b; /* slate-800 */
 }
 
-/* ------------------------------------------------------------------- */
-/* PREMIUM FORM CONTROLS (Dark mode) */
-/* ------------------------------------------------------------------- */
+/* --- Premium form controls for dark admin UI ------------------------- */
 
+/* Base: all text inputs, selects, textareas (but not checkboxes/radios) */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
-  color: #f9fafb !important;
+  color: #f9fafb !important;               /* almost white text */
   background: radial-gradient(circle at top left, #111827, #020617);
-  border-radius: 0.75rem;
-  border: 1px solid #1f2937;
+  border-radius: 0.75rem;                  /* rounded-xl */
+  border: 1px solid #1f2937;               /* slate-800 border */
   padding: 0.65rem 0.9rem;
   font-size: 0.95rem;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
 
   box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.9),
-    0 18px 40px rgba(15, 23, 42, 0.85);
+    0 0 0 1px rgba(15, 23, 42, 0.9),       /* subtle frame */
+    0 18px 40px rgba(15, 23, 42, 0.85);    /* deep drop shadow */
 
   transition:
     border-color 120ms ease-out,
@@ -96,71 +111,59 @@ textarea {
     transform 80ms ease-out;
 }
 
-input:hover,
+/* Hover: slight lift + brighter border */
+input:not([type="checkbox"]):not([type="radio"]):hover,
 select:hover,
 textarea:hover {
-  border-color: #38bdf8;
+  border-color: #38bdf8;                   /* sky-400 */
+  box-shadow:
+    0 0 0 1px rgba(56, 189, 248, 0.35),
+    0 24px 50px rgba(15, 23, 42, 0.95);
   transform: translateY(-1px);
 }
 
-input:focus,
+/* Focus: strong amber ring + crisp border */
+input:not([type="checkbox"]):not([type="radio"]):focus,
 select:focus,
 textarea:focus {
   outline: none !important;
-  border-color: #facc15;
+  border-color: #facc15;                   /* amber-400 */
   box-shadow:
     0 0 0 1px rgba(250, 204, 21, 0.7),
     0 0 0 3px rgba(250, 204, 21, 0.18),
     0 24px 55px rgba(15, 23, 42, 0.98);
 }
 
+/* Placeholder text: readable but clearly secondary */
 input::placeholder,
 textarea::placeholder {
-  color: #9ca3af !important;
+  color: #9ca3af !important;               /* gray-400 */
 }
 
+/* Disabled / read-only: flatten the elevation and dim slightly */
 input:disabled,
 select:disabled,
 textarea:disabled,
-input[readonly] {
+input[readonly],
+textarea[readonly] {
   background: #020617;
   border-color: #1f2937;
-  color: #6b7280 !important;
+  color: #6b7280 !important;               /* gray-500 */
   box-shadow: none;
   cursor: not-allowed;
 }
 
+/* Labels: crisp and slightly brighter for dark UI */
 label {
-  color: #e5e7eb !important;
+  color: #e5e7eb !important;               /* gray-200 */
   font-size: 0.8rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
+/* Error text under fields (like your “did not match pattern” message) */
 .text-error,
 .text-error * {
-  color: #f97373 !important;
+  color: #f97373 !important;               /* soft red */
   font-weight: 500;
-}
-
-/* --- Clock page background with stone texture --- */
-.clock-stone-bg {
-  background-image: url("/stone-texture.jpeg") !important;
-  background-size: cover;
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
-.clock-stone-bg::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35); /* readability overlay */
-  z-index: 1;
-  border-radius: inherit;
-}
-
-.clock-stone-bg > * {
-  position: relative;
-  z-index: 2;
 }
