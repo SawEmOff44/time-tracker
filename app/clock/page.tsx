@@ -1,336 +1,260 @@
+// app/clock/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 
-type ApiResponse = {
-  status?: "clocked_in" | "clocked_out";
-  message?: string;
-  shift?: {
-    clockIn?: string | null;
-    clockOut?: string | null;
-  } | null;
-  locationName?: string | null;
-  totalHoursThisPeriod?: number;
-  error?: string;
+type ClockResponse = {
+  status: "clocked_in" | "clocked_out";
+  message: string;
+  locationName: string | null;
+  totalHoursThisPeriod: number | null;
 };
 
-function formatTime(date: Date | null) {
-  if (!date) return "—";
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
+function formatDuration(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
-function formatDate(date: Date | null) {
-  if (!date) return "—";
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "2-digit",
-    year: "numeric",
-  });
-}
+  const hh = hours.toString().padStart(2, "0");
+  const mm = minutes.toString().padStart(2, "0");
+  const ss = seconds.toString().padStart(2, "0");
 
-function formatElapsed(seconds: number) {
-  if (seconds <= 0) return "00:00:00";
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+  return `${hh}:${mm}:${ss}`;
 }
 
 export default function ClockPage() {
   const [employeeCode, setEmployeeCode] = useState("");
   const [pin, setPin] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  const [gpsStatus, setGpsStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
 
-  const [status, setStatus] = useState<"idle" | "clocked_in" | "clocked_out">(
-    "idle"
-  );
-  const [locationName, setLocationName] = useState<string | null>(null);
-  const [totalHoursThisPeriod, setTotalHoursThisPeriod] = useState<number | null>(
-    null
-  );
+  const [hoursThisWeek, setHoursThisWeek] = useState<number | null>(null);
 
-  const [lastClockIn, setLastClockIn] = useState<Date | null>(null);
-  const [lastClockOut, setLastClockOut] = useState<Date | null>(null);
+  const [isClockedIn, setIsClockedIn] = useState(false);
+  const [currentShiftSeconds, setCurrentShiftSeconds] = useState(0);
 
-  const [activeShiftStart, setActiveShiftStart] = useState<Date | null>(null);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusVariant, setStatusVariant] = useState<
+    "neutral" | "success" | "error"
+  >("neutral");
 
-  // Timer for active shift
+  // Grab GPS once when the page loads
   useEffect(() => {
-    if (!activeShiftStart) {
-      setElapsedSeconds(0);
-      return;
-    }
-
-    const tick = () => {
-      const now = new Date();
-      const diff = Math.floor(
-        (now.getTime() - activeShiftStart.getTime()) / 1000
-      );
-      setElapsedSeconds(diff > 0 ? diff : 0);
-    };
-
-    tick(); // initialize immediately
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [activeShiftStart]);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setSuccessMessage(null);
-    setGpsStatus(null);
-
-    if (!navigator.geolocation) {
-      setError("This device does not support GPS location.");
-      setLoading(false);
+    if (!("geolocation" in navigator)) {
+      setLocationError("This device does not support GPS.");
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-
-        setGpsStatus(
-          `Got GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`
-        );
-
-        try {
-          const res = await fetch("/api/clock", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              employeeCode,
-              pin,
-              lat,
-              lng,
-            }),
-          });
-
-          const data = (await res.json()) as ApiResponse;
-
-          if (!res.ok) {
-            setError(data.error || "Unknown error clocking in/out.");
-            setStatus("idle");
-            setActiveShiftStart(null);
-            return;
-          }
-
-          // Success
-          if (data.status === "clocked_in" || data.status === "clocked_out") {
-            setStatus(data.status);
-          } else {
-            setStatus("idle");
-          }
-
-          setSuccessMessage(data.message || null);
-          setLocationName(data.locationName ?? null);
-
-          if (typeof data.totalHoursThisPeriod === "number") {
-            setTotalHoursThisPeriod(data.totalHoursThisPeriod);
-          }
-
-          // Handle shift times
-          const clockInIso = data.shift?.clockIn ?? null;
-          const clockOutIso = data.shift?.clockOut ?? null;
-
-          const clockInDate = clockInIso ? new Date(clockInIso) : null;
-          const clockOutDate = clockOutIso ? new Date(clockOutIso) : null;
-
-          setLastClockIn(clockInDate);
-          setLastClockOut(clockOutDate);
-
-          if (data.status === "clocked_in" && clockInDate) {
-            setActiveShiftStart(clockInDate);
-          } else {
-            setActiveShiftStart(null);
-          }
-        } catch {
-          setError("Network error contacting the server.");
-        } finally {
-          setLoading(false);
-        }
+      (pos) => {
+        setLat(pos.coords.latitude);
+        setLng(pos.coords.longitude);
+        setLocationError(null);
       },
-      (geoErr) => {
-        if (geoErr.code === geoErr.PERMISSION_DENIED) {
-          setGpsStatus("Location permission denied.");
-          setError("We need GPS permission to clock you in/out.");
-        } else if (geoErr.code === geoErr.POSITION_UNAVAILABLE) {
-          setGpsStatus("Location unavailable.");
-          setError("Could not determine your location.");
-        } else if (geoErr.code === geoErr.TIMEOUT) {
-          setGpsStatus("Location request timed out.");
-          setError("Location request timed out. Try again.");
-        } else {
-          setGpsStatus("Unknown GPS error.");
-          setError("Unknown GPS error occurred.");
-        }
-        setLoading(false);
+      (err) => {
+        console.error("Geolocation error", err);
+        setLocationError("Unable to read GPS location. Check permissions.");
       },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
-      }
+      { enableHighAccuracy: true, timeout: 8000 }
     );
+  }, []);
+
+  // Simple client-side timer that runs while isClockedIn is true
+  useEffect(() => {
+    let id: number | undefined;
+
+    if (isClockedIn) {
+      id = window.setInterval(() => {
+        setCurrentShiftSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setCurrentShiftSeconds(0);
+    }
+
+    return () => {
+      if (id) window.clearInterval(id);
+    };
+  }, [isClockedIn]);
+
+  async function handleClock() {
+    if (!employeeCode || !pin) return;
+
+    setSubmitting(true);
+    setStatusMessage(null);
+    setStatusVariant("neutral");
+
+    try {
+      const res = await fetch("/api/clock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          employeeCode: employeeCode.trim(),
+          pin: pin.trim(),
+          lat,
+          lng,
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        const msg = errBody?.error ?? "Clock action failed.";
+        setStatusVariant("error");
+        setStatusMessage(msg);
+        return;
+      }
+
+      const data = (await res.json()) as ClockResponse;
+
+      // Update weekly hours
+      if (typeof data.totalHoursThisPeriod === "number") {
+        setHoursThisWeek(data.totalHoursThisPeriod);
+      }
+
+      if (data.status === "clocked_in") {
+        setIsClockedIn(true);
+        setStatusVariant("success");
+        const locName = data.locationName ?? "ADHOC job site";
+        setStatusMessage(`Clocked in at ${locName}. Clock-in recorded.`);
+      } else {
+        setIsClockedIn(false);
+        setStatusVariant("neutral");
+        setStatusMessage(data.message || "Clock-out recorded.");
+      }
+    } catch (err) {
+      console.error(err);
+      setStatusVariant("error");
+      setStatusMessage("Unexpected error while clocking in/out.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  const isSubmitDisabled = loading || !employeeCode || !pin;
+  const canSubmit = !!employeeCode && !!pin && !submitting;
 
-  const isClockedIn = status === "clocked_in";
+  const statusPillClasses =
+    isClockedIn
+      ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/40"
+      : "bg-slate-500/10 text-slate-200 border border-slate-500/40";
+
+  const buttonClasses =
+    "w-full py-3 rounded-xl font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent " +
+    (isClockedIn
+      ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400 focus:ring-emerald-400"
+      : "bg-slate-900 text-slate-50 hover:bg-slate-800 focus:ring-slate-300");
+
+  const statusTextColor =
+    statusVariant === "error"
+      ? "text-red-400"
+      : statusVariant === "success"
+      ? "text-emerald-300"
+      : "text-slate-200";
 
   return (
-    <main className="min-h-[calc(100vh-64px)] flex items-center justify-center bg-gray-50 px-4 py-6">
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-md border border-gray-200 p-6 space-y-5">
-        {/* Title */}
-        <div className="text-center space-y-1">
-          <h1 className="text-xl font-semibold text-gray-900">
-            Clock In / Out
-          </h1>
-          <p className="text-xs text-gray-500">
-            GPS is required. Make sure location services are enabled.
-          </p>
+    <div className="min-h-screen flex items-center justify-center clock-stone-bg">
+      {/* Outer shell with soft glow */}
+      <div className="w-full max-w-xl rounded-3xl bg-slate-950/75 shadow-[0_40px_120px_rgba(15,23,42,0.95)] border border-slate-700/70 backdrop-blur-xl px-8 py-8 sm:px-10 sm:py-10">
+        {/* Header row */}
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-lg sm:text-xl font-semibold text-slate-50">
+              Clock In / Out
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-300 mt-1">
+              GPS is required. Make sure location services are enabled.
+            </p>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusPillClasses}`}>
+            {isClockedIn ? "Status: Clocked in" : "Status: Clocked out"}
+          </span>
         </div>
 
-        {/* Status banner */}
-        {(isClockedIn || status === "clocked_out") && (
-          <div
-            className={`rounded-xl px-3 py-3 text-xs ${
-              isClockedIn
-                ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
-                : "bg-slate-50 border border-slate-200 text-slate-800"
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide">
-                {isClockedIn ? "Currently Clocked In" : "Clocked Out"}
-              </span>
-              <span
-                className={`inline-flex h-2 w-2 rounded-full ${
-                  isClockedIn ? "bg-emerald-500" : "bg-slate-400"
-                }`}
-              />
-            </div>
-            {successMessage && (
-              <p className="mt-1 text-sm font-medium">{successMessage}</p>
-            )}
-            {locationName && (
-              <p className="mt-0.5 text-[11px] text-gray-600">
-                Location: <span className="font-medium">{locationName}</span>
-              </p>
-            )}
-            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-gray-600">
-              <div>
-                <div className="font-semibold text-gray-700">Last Clock In</div>
-                <div>{formatDate(lastClockIn)}</div>
-                <div>{formatTime(lastClockIn)}</div>
-              </div>
-              <div>
-                <div className="font-semibold text-gray-700">Last Clock Out</div>
-                <div>{formatDate(lastClockOut)}</div>
-                <div>{formatTime(lastClockOut)}</div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Summary stats */}
-        <div className="grid grid-cols-2 gap-3 text-center text-xs">
-          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-            <div className="text-[11px] uppercase tracking-wide text-gray-500">
+        {/* Hours row */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/80">
+            <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">
               Hours this week
-            </div>
-            <div className="mt-1 text-lg font-semibold text-gray-900">
-              {totalHoursThisPeriod != null
-                ? totalHoursThisPeriod.toFixed(2)
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-50">
+              {typeof hoursThisWeek === "number"
+                ? `${hoursThisWeek.toFixed(2)}h`
                 : "—"}
-            </div>
+            </p>
           </div>
-          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-            <div className="text-[11px] uppercase tracking-wide text-gray-500">
+
+          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/80">
+            <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">
               Current shift
-            </div>
-            <div className="mt-1 text-lg font-mono font-semibold text-gray-900">
-              {isClockedIn ? formatElapsed(elapsedSeconds) : "00:00:00"}
-            </div>
+            </p>
+            <p className="mt-2 text-2xl font-mono font-semibold text-slate-50">
+              {formatDuration(currentShiftSeconds)}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Timer runs while you&apos;re clocked in.
+            </p>
           </div>
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Employee Code */}
+        <div className="space-y-5">
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
               Employee Code
             </label>
             <input
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
+              type="text"
               placeholder="e.g. ALI001"
               value={employeeCode}
-              onChange={(e) => setEmployeeCode(e.target.value.toUpperCase())}
-              autoComplete="off"
+              onChange={(e) => setEmployeeCode(e.target.value)}
+              className="mt-1 w-full"
             />
           </div>
 
-          {/* PIN */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
               PIN
             </label>
             <input
               type="password"
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black focus:border-black"
+              placeholder="••••"
               value={pin}
               onChange={(e) => setPin(e.target.value)}
-              autoComplete="off"
+              className="mt-1 w-full"
             />
           </div>
 
-          {/* Submit */}
+          {locationError && (
+            <p className="text-xs text-amber-300/90">
+              {locationError} We&apos;ll still record your time, but GPS
+              validation may fail.
+            </p>
+          )}
+
           <button
-            type="submit"
-            disabled={isSubmitDisabled}
-            className={`w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition ${
-              isSubmitDisabled
-                ? "bg-gray-400 cursor-not-allowed"
-                : isClockedIn
-                ? "bg-red-600 hover:bg-red-700"
-                : "bg-black hover:bg-gray-900"
-            }`}
+            type="button"
+            className={buttonClasses}
+            disabled={!canSubmit}
+            onClick={handleClock}
           >
-            {loading
-              ? "Checking location..."
+            {submitting
+              ? "Saving..."
               : isClockedIn
               ? "Clock Out"
               : "Clock In"}
           </button>
-        </form>
-
-        {/* GPS + Error */}
-        <div className="space-y-1 text-xs">
-          {gpsStatus && (
-            <div className="text-gray-500">
-              <span className="font-medium">GPS:</span> {gpsStatus}
-            </div>
-          )}
-          {error && (
-            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
-              {error}
-            </div>
-          )}
         </div>
+
+        {/* Status message */}
+        {statusMessage && (
+          <p className={`mt-4 text-xs sm:text-sm ${statusTextColor}`}>
+            {statusMessage}
+          </p>
+        )}
       </div>
-    </main>
+    </div>
   );
 }

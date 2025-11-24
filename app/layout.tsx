@@ -16,9 +16,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-100 text-slate-900">
-        {/* Public header */}
-        <header className="border-b border-slate-200 bg-white">
+      <body className="min-h-screen bg-slate-950 text-slate-50">
+        {/* Top nav fixed above everything */}
+        <header className="fixed inset-x-0 top-0 z-40 border-b border-slate-800 bg-slate-950/90 backdrop-blur">
           <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
             <Link href="/" className="flex items-center gap-3">
               <div className="h-8 w-auto">
@@ -32,24 +32,25 @@ export default function RootLayout({
                 />
               </div>
               <div className="flex flex-col leading-tight">
-                <span className="text-sm font-semibold text-slate-900">
-                  Time Tracking
+                <span className="text-[11px] font-semibold tracking-[0.2em] text-amber-400">
+                  ADMIN
                 </span>
-                <span className="text-[11px] text-slate-500">
-                  GPS-aware clock in / out
+                <span className="text-xs font-medium text-slate-200">
+                  Time tracking control panel
                 </span>
               </div>
             </Link>
+
             <nav className="flex items-center gap-3 text-sm">
               <Link
                 href="/clock"
-                className="rounded-md px-3 py-1.5 text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors"
+                className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
               >
                 Clock In / Out
               </Link>
               <Link
                 href="/admin"
-                className="rounded-md px-3 py-1.5 border border-slate-300 text-slate-800 hover:bg-slate-900 hover:text-slate-50 hover:border-slate-900 transition-colors"
+                className="rounded-full border border-slate-600 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm hover:bg-amber-300"
               >
                 Admin
               </Link>
@@ -57,7 +58,8 @@ export default function RootLayout({
           </div>
         </header>
 
-        <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+        {/* Push content below fixed header */}
+        <main className="mx-auto max-w-6xl px-4 pt-20 pb-8">{children}</main>
       </body>
     </html>
   );

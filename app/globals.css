@@ -12,15 +12,13 @@ body {
   padding: 0;
 }
 
-/* Overall dark shell – pages can still override with bg-* classes */
+/* Dark shell background */
 html,
 body {
   background-color: #020617; /* slate-950 */
 }
 
-/* --------- Shared UI helpers --------- */
-
-/* Sidebar link helpers (used in AdminLayout) */
+/* -------- Sidebar link helpers -------- */
 .sidebar-link {
   color: #e2e8f0; /* slate-200 */
 }
@@ -29,7 +27,7 @@ body {
   color: #0f172a; /* slate-900 on amber bg */
 }
 
-/* Generic card styling */
+/* -------- Generic card styling -------- */
 .card {
   @apply rounded-2xl border border-slate-800 bg-slate-900/70 px-4 py-4 shadow-sm;
 }
@@ -50,111 +48,46 @@ body {
   @apply mt-1 text-xs text-slate-400;
 }
 
-/* ------------------------------------------------------------------ */
-/* PREMIUM DARK TABLES (Payroll, Shifts, Analytics)                    */
-/* ------------------------------------------------------------------ */
-
-/* Put .admin-table on the <table> element */
+/* -------- Admin Table Styling -------- */
 .admin-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  background: rgba(15, 23, 42, 0.98); /* very dark slate */
-  border-radius: 0.9rem;
-  overflow: hidden;
-  color: #e5e7eb; /* gray-200 / readable */
-  font-size: 0.875rem; /* text-sm-ish */
-  box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.9),
-    0 22px 50px rgba(15, 23, 42, 0.95);
-}
-
-/* Header row */
-.admin-table thead {
-  background: radial-gradient(circle at top left, #111827, #020617);
+  @apply text-slate-100 text-xs;
 }
 
 .admin-table thead th {
-  padding: 0.65rem 1rem;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  text-align: left;
-  color: #e5e7eb; /* bright header text */
-  border-bottom: 1px solid rgba(31, 41, 55, 0.9); /* slate-800 */
-  white-space: nowrap;
+  @apply text-slate-200 font-semibold;
 }
 
-/* Body cells */
 .admin-table tbody td {
-  padding: 0.6rem 1rem;
-  font-size: 0.875rem; /* keep consistent with table base */
-  color: #e5e7eb;
-  border-top: 1px solid rgba(15, 23, 42, 0.95);
+  @apply text-slate-100;
 }
 
-/* Zebra striping */
-.admin-table tbody tr:nth-child(odd) {
-  background: rgba(15, 23, 42, 0.98);
-}
-
-.admin-table tbody tr:nth-child(even) {
-  background: rgba(15, 23, 42, 0.94);
-}
-
-/* Hover state: subtle lift + amber accent on the left edge */
-.admin-table tbody tr {
-  transition:
-    background-color 120ms ease-out,
-    box-shadow 120ms ease-out,
-    transform 80ms ease-out;
-}
-
-.admin-table tbody tr:hover {
-  background: radial-gradient(circle at top left, #111827, #020617);
-  box-shadow:
-    inset 3px 0 0 #facc15, /* amber-400 strip */
-    0 18px 40px rgba(15, 23, 42, 0.9);
-  transform: translateY(-1px);
-}
-
-/* Right-align numeric columns when you add .table-num to th/td */
-.admin-table th.table-num,
-.admin-table td.table-num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Slightly muted secondary text inside tables when needed */
 .admin-table .text-muted {
-  color: #9ca3af; /* gray-400 */
+  @apply text-slate-400;
 }
 
-/* Keep your map / Leaflet container from shrinking oddly */
+/* Prevent Leaflet maps from shrinking */
 .leaflet-container {
   border-radius: 0.75rem;
   border: 1px solid #1e293b; /* slate-800 */
 }
 
-/* --- Premium form controls for dark admin UI ------------------------- */
+/* ------------------------------------------------------------------- */
+/* PREMIUM FORM CONTROLS (Dark mode) */
+/* ------------------------------------------------------------------- */
 
-/* Base: all text inputs, selects, textareas (but not checkboxes/radios) */
 input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
-  color: #f9fafb !important;               /* almost white text */
+  color: #f9fafb !important;
   background: radial-gradient(circle at top left, #111827, #020617);
-  border-radius: 0.75rem;                  /* rounded-xl */
-  border: 1px solid #1f2937;               /* slate-800 border */
+  border-radius: 0.75rem;
+  border: 1px solid #1f2937;
   padding: 0.65rem 0.9rem;
   font-size: 0.95rem;
-  line-height: 1.4;
-  letter-spacing: 0.01em;
 
   box-shadow:
-    0 0 0 1px rgba(15, 23, 42, 0.9),       /* subtle frame */
-    0 18px 40px rgba(15, 23, 42, 0.85);    /* deep drop shadow */
+    0 0 0 1px rgba(15, 23, 42, 0.9),
+    0 18px 40px rgba(15, 23, 42, 0.85);
 
   transition:
     border-color 120ms ease-out,
@@ -163,59 +96,71 @@ textarea {
     transform 80ms ease-out;
 }
 
-/* Hover: slight lift + brighter border */
-input:not([type="checkbox"]):not([type="radio"]):hover,
+input:hover,
 select:hover,
 textarea:hover {
-  border-color: #38bdf8;                   /* sky-400 */
-  box-shadow:
-    0 0 0 1px rgba(56, 189, 248, 0.35),
-    0 24px 50px rgba(15, 23, 42, 0.95);
+  border-color: #38bdf8;
   transform: translateY(-1px);
 }
 
-/* Focus: strong amber ring + crisp border */
-input:not([type="checkbox"]):not([type="radio"]):focus,
+input:focus,
 select:focus,
 textarea:focus {
   outline: none !important;
-  border-color: #facc15;                   /* amber-400 */
+  border-color: #facc15;
   box-shadow:
     0 0 0 1px rgba(250, 204, 21, 0.7),
     0 0 0 3px rgba(250, 204, 21, 0.18),
     0 24px 55px rgba(15, 23, 42, 0.98);
 }
 
-/* Placeholder text: readable but clearly secondary */
 input::placeholder,
 textarea::placeholder {
-  color: #9ca3af !important;               /* gray-400 */
+  color: #9ca3af !important;
 }
 
-/* Disabled / read-only: flatten the elevation and dim slightly */
 input:disabled,
 select:disabled,
 textarea:disabled,
-input[readonly],
-textarea[readonly] {
+input[readonly] {
   background: #020617;
   border-color: #1f2937;
-  color: #6b7280 !important;               /* gray-500 */
+  color: #6b7280 !important;
   box-shadow: none;
   cursor: not-allowed;
 }
 
-/* Labels: crisp and slightly brighter for dark UI */
 label {
-  color: #e5e7eb !important;               /* gray-200 */
+  color: #e5e7eb !important;
   font-size: 0.8rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-/* Error text under fields (like your “did not match pattern” message) */
 .text-error,
 .text-error * {
-  color: #f97373 !important;               /* soft red */
+  color: #f97373 !important;
   font-weight: 500;
+}
+
+/* --- Clock page background with stone texture --- */
+.clock-stone-bg {
+  background-image: url("/stone-texture.jpeg") !important;
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.clock-stone-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35); /* readability overlay */
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.clock-stone-bg > * {
+  position: relative;
+  z-index: 2;
 }
