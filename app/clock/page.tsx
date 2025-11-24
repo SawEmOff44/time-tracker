@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 type ClockResponse = {
   status: "clocked_in" | "clocked_out";
@@ -136,10 +137,9 @@ export default function ClockPage() {
 
   const canSubmit = !!employeeCode && !!pin && !submitting;
 
-  const statusPillClasses =
-    isClockedIn
-      ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/40"
-      : "bg-slate-500/10 text-slate-200 border border-slate-500/40";
+  const statusPillClasses = isClockedIn
+    ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/40"
+    : "bg-slate-500/10 text-slate-200 border border-slate-500/40";
 
   const buttonClasses =
     "w-full py-3 rounded-xl font-semibold transition focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent " +
@@ -168,7 +168,9 @@ export default function ClockPage() {
               GPS is required. Make sure location services are enabled.
             </p>
           </div>
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusPillClasses}`}>
+          <span
+            className={`px-3 py-1 rounded-full text-xs font-medium ${statusPillClasses}`}
+          >
             {isClockedIn ? "Status: Clocked in" : "Status: Clocked out"}
           </span>
         </div>
@@ -248,9 +250,22 @@ export default function ClockPage() {
           </button>
         </div>
 
+        {/* Self-service registration link */}
+        <p className="mt-4 text-xs text-slate-300 text-center">
+          New worker?{" "}
+          <Link
+            href="/clock/create-account"
+            className="text-amber-300 hover:text-amber-200 underline underline-offset-4"
+          >
+            Create your account
+          </Link>
+        </p>
+
         {/* Status message */}
         {statusMessage && (
-          <p className={`mt-4 text-xs sm:text-sm ${statusTextColor}`}>
+          <p
+            className={`mt-4 text-xs sm:text-sm text-center ${statusTextColor}`}
+          >
             {statusMessage}
           </p>
         )}
