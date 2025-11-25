@@ -12,14 +12,22 @@ type PayrollRow = {
   shiftCount?: number | null;
 };
 
-// ----- Helpers: dates & pay periods (Fri → Thu) -----------------------------
+// ---- Date helpers (UTC-safe, Friday–Thursday periods) ----------------------
 
-// Format for <input type="date">
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+// Turn a Date (assumed to be in UTC) into "YYYY-MM-DD"
+function toISODateUTC(date: Date): string {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+// Add days to an ISO date string (YYYY-MM-DD) in UTC space
+function addDaysISO(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return toISODateUTC(dt);
 }
 
 /**
@@ -27,36 +35,33 @@ function formatDateInput(date: Date): string {
  * Friday is the START of the period, Thursday is the END.
  */
 function getCurrentPayPeriod(today = new Date()) {
-  const day = today.getDay(); // 0 = Sun … 5 = Fri, 6 = Sat
+  // Work in UTC to avoid weird timezone shifts
+  const utcToday = new Date(
+    Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  );
+  const day = utcToday.getUTCDay(); // 0 = Sun … 5 = Fri, 6 = Sat
+
+  // How many days since last Friday?
+  // e.g. Fri(5) -> 0, Sat(6) -> 1, Sun(0) -> 2, Mon(1) -> 3, ..., Thu(4) -> 6
   const daysSinceFriday = (day - 5 + 7) % 7;
 
-  const start = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate() - daysSinceFriday
-  );
-  const end = new Date(
-    start.getFullYear(),
-    start.getMonth(),
-    start.getDate() + 6
-  );
+  const startUTC = new Date(utcToday);
+  startUTC.setUTCDate(startUTC.getUTCDate() - daysSinceFriday);
+
+  const endUTC = new Date(startUTC);
+  endUTC.setUTCDate(endUTC.getUTCDate() + 6);
 
   return {
-    startDateStr: formatDateInput(start),
-    endDateStr: formatDateInput(end),
+    startDateStr: toISODateUTC(startUTC),
+    endDateStr: toISODateUTC(endUTC),
   };
 }
 
-// Pretty label for card header
-function formatDisplayDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-  });
+// For the *labels* we just want local calendar dates, not UTC parsing
+function parseISOToLocalDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
+  return new Date(y, m - 1, d); // local midnight
 }
-
-// ---------------------------------------------------------------------------
 
 export default function AdminPayrollPage() {
   const { startDateStr, endDateStr } = getCurrentPayPeriod();
@@ -68,16 +73,14 @@ export default function AdminPayrollPage() {
   const [error, setError] = useState<string | null>(null);
   const [totalHours, setTotalHours] = useState<number>(0);
 
-  // Move by whole pay periods (7 days)
+  // Move by whole pay periods (7 days).
+  // IMPORTANT: always recompute end = start + 6 so we never drift.
   function shiftPayPeriod(offsetWeeks: number) {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const newStartStr = addDaysISO(startDate, offsetWeeks * 7);
+    const newEndStr = addDaysISO(newStartStr, 6);
 
-    start.setDate(start.getDate() + offsetWeeks * 7);
-    end.setDate(end.getDate() + offsetWeeks * 7);
-
-    setStartDate(formatDateInput(start));
-    setEndDate(formatDateInput(end));
+    setStartDate(newStartStr);
+    setEndDate(newEndStr);
   }
 
   async function loadPayroll() {
@@ -103,8 +106,7 @@ export default function AdminPayrollPage() {
       setRows(data);
       const sum = data.reduce(
         (acc, row) =>
-          acc +
-          (typeof row.totalHours === "number" ? row.totalHours : 0),
+          acc + (typeof row.totalHours === "number" ? row.totalHours : 0),
         0
       );
       setTotalHours(Number(sum.toFixed(2)));
@@ -118,56 +120,71 @@ export default function AdminPayrollPage() {
     }
   }
 
+  // CSV export for whatever period is currently selected
+  function downloadCsv() {
+    if (rows.length === 0) return;
+
+    const header = [
+      "Employee",
+      "Employee Code",
+      "Shift Count",
+      "Total Hours",
+      "Period Start (Fri)",
+      "Period End (Thu)",
+    ];
+
+    const lines = [
+      header.join(","),
+      ...rows.map((row) => {
+        const safeName = (row.name || "Unnamed worker").replace(/,/g, " ");
+        const safeCode = (row.employeeCode ?? "").replace(/,/g, " ");
+        const shiftCount =
+          typeof row.shiftCount === "number" ? row.shiftCount : "";
+        const hours = row.totalHours.toFixed(2);
+
+        return [
+          `"${safeName}"`,
+          `"${safeCode}"`,
+          shiftCount,
+          hours,
+          startDate,
+          endDate,
+        ].join(",");
+      }),
+    ];
+
+    const csvContent = lines.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payroll_${startDate}_to_${endDate}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+  }
+
   // Initial load for the current pay period
   useEffect(() => {
     void loadPayroll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // CSV export for current period
-  function exportCSV() {
-    if (!rows.length) return;
-
-    const header = [
-      "User ID",
-      "Name",
-      "Employee Code",
-      "Shift Count",
-      "Total Hours",
-    ];
-
-    const lines = [
-      header.join(","),
-      ...rows.map((row) =>
-        [
-          row.userId,
-          `"${(row.name || "").replace(/"/g, '""')}"`,
-          row.employeeCode ?? "",
-          row.shiftCount ?? "",
-          row.totalHours.toFixed(2),
-        ].join(",")
-      ),
-    ];
-
-    const csv = lines.join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `payroll_${startDate}_to_${endDate}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  // Display label – **use the selected start/end dates directly**
   const periodLabel = (() => {
     if (!startDate || !endDate) return "";
-    const s = new Date(startDate);
-    const e = new Date(endDate);
-    return `${formatDisplayDate(s)} – ${formatDisplayDate(e)} (Fri–Thu)`;
+    const s = parseISOToLocalDate(startDate);
+    const e = parseISOToLocalDate(endDate);
+
+    const fmt = (d: Date) =>
+      d.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "2-digit",
+        day: "2-digit",
+        year: "numeric",
+      });
+
+    return `${fmt(s)} – ${fmt(e)} (Fri–Thu)`;
   })();
 
   return (
@@ -240,12 +257,23 @@ export default function AdminPayrollPage() {
             >
               {loading ? "Loading…" : "Apply"}
             </button>
+
+            <button
+              type="button"
+              onClick={downloadCsv}
+              disabled={rows.length === 0}
+              className="rounded-full border border-amber-400/70 px-4 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-400/10 disabled:opacity-40"
+            >
+              Export CSV
+            </button>
           </div>
         </div>
 
         {/* Error */}
         {error && (
-          <p className="mt-3 text-xs text-red-300">{error}</p>
+          <p className="mt-3 text-xs text-red-300">
+            {error}
+          </p>
         )}
 
         {/* Summary */}
@@ -259,9 +287,7 @@ export default function AdminPayrollPage() {
           </p>
           <p className="text-xs font-semibold text-slate-100">
             Total hours this period:{" "}
-            <span className="text-amber-300">
-              {totalHours.toFixed(2)}h
-            </span>
+            <span className="text-amber-300">{totalHours.toFixed(2)}h</span>
           </p>
         </div>
       </div>
@@ -272,19 +298,9 @@ export default function AdminPayrollPage() {
           <h2 className="text-sm font-semibold text-slate-100">
             Hours by worker
           </h2>
-          <div className="flex items-center gap-3">
-            <p className="text-[11px] text-slate-400">
-              Based on all shifts within the selected dates.
-            </p>
-            <button
-              type="button"
-              onClick={exportCSV}
-              disabled={!rows.length}
-              className="rounded-full border border-slate-600 px-3 py-1.5 text-[11px] font-medium text-slate-100 hover:bg-slate-800 disabled:opacity-40"
-            >
-              Export CSV
-            </button>
-          </div>
+          <p className="text-[11px] text-slate-400">
+            Based on all approved shifts within the selected dates.
+          </p>
         </div>
 
         <div className="mt-2 overflow-x-auto">
@@ -310,10 +326,7 @@ export default function AdminPayrollPage() {
               )}
 
               {rows.map((row) => (
-                <tr
-                  key={row.userId}
-                  className="border-b border-slate-800/80"
-                >
+                <tr key={row.userId} className="border-b border-slate-800/80">
                   <td className="px-3 py-2 align-middle">
                     <div className="text-sm text-slate-50">
                       {row.name || "Unnamed worker"}
@@ -323,9 +336,7 @@ export default function AdminPayrollPage() {
                     {row.employeeCode ?? "—"}
                   </td>
                   <td className="px-3 py-2 align-middle text-right text-slate-200">
-                    {typeof row.shiftCount === "number"
-                      ? row.shiftCount
-                      : "—"}
+                    {typeof row.shiftCount === "number" ? row.shiftCount : "—"}
                   </td>
                   <td className="px-3 py-2 align-middle text-right text-slate-50">
                     {row.totalHours.toFixed(2)}h
