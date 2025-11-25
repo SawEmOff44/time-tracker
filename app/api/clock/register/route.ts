@@ -1,88 +1,104 @@
 // app/api/clock/register/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
-type RegisterBody = {
-  name?: string;
-  email?: string;
-  employeeCode?: string;
-  pin?: string;
-};
+import bcrypt from "bcryptjs";
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as RegisterBody;
+    const body = await req.json();
 
     const rawName = (body.name ?? "").trim();
     const rawEmail = (body.email ?? "").trim();
-    const rawCode = (body.employeeCode ?? "").trim();
+    const rawEmployeeCode = (body.employeeCode ?? "").trim();
     const rawPin = (body.pin ?? "").trim();
 
-    if (!rawName || !rawCode || !rawPin) {
-      return NextResponse.json(
-        { error: "Name, employee code, and PIN are required." },
-        { status: 400 }
-      );
-    }
-
-    if (rawCode.length < 3 || rawCode.length > 16) {
-      return NextResponse.json(
-        { error: "Employee code must be between 3 and 16 characters." },
-        { status: 400 }
-      );
-    }
-
-    // PIN: 4–8 digits
-    if (!/^\d{4,8}$/.test(rawPin)) {
-      return NextResponse.json(
-        { error: "PIN must be 4–8 digits." },
-        { status: 400 }
-      );
-    }
-
-    const normalizedCode = rawCode.toUpperCase();
-
-    // Check if employee code already in use
-    const existing = await prisma.user.findFirst({
-      where: { employeeCode: normalizedCode },
-    });
-
-    if (existing) {
+    if (!rawName || !rawEmployeeCode || !rawPin) {
       return NextResponse.json(
         {
           error:
-            "That employee code is already in use. Talk to your supervisor or pick a different code.",
+            "Name, employee code, and PIN are required to create an account.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Basic validation: simple code pattern like ABC123, but not too strict
+    if (rawEmployeeCode.length < 3 || rawEmployeeCode.length > 20) {
+      return NextResponse.json(
+        { error: "Employee code must be between 3 and 20 characters." },
+        { status: 400 }
+      );
+    }
+
+    if (rawPin.length < 4 || rawPin.length > 12) {
+      return NextResponse.json(
+        { error: "PIN must be between 4 and 12 characters." },
+        { status: 400 }
+      );
+    }
+
+    // Ensure employeeCode is unique
+    const existingByCode = await prisma.user.findUnique({
+      where: { employeeCode: rawEmployeeCode },
+    });
+
+    if (existingByCode) {
+      return NextResponse.json(
+        {
+          error:
+            "That employee code is already in use. Check with your office to confirm your assigned code.",
         },
         { status: 409 }
       );
     }
 
-    // Create as INACTIVE = awaiting approval
+    // Optional: ensure email isn't already taken (only if an email is provided)
+    if (rawEmail) {
+      const existingByEmail = await prisma.user.findFirst({
+        where: { email: rawEmail },
+      });
+
+      if (existingByEmail) {
+        return NextResponse.json(
+          {
+            error:
+              "That email address is already associated with an account. Use a different email or contact your office.",
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const pinHash = await bcrypt.hash(rawPin, 10);
+
+    // Create a WORKER-level user, inactive by default (shows in "Pending")
     const user = await prisma.user.create({
       data: {
         name: rawName,
         email: rawEmail || null,
-        employeeCode: normalizedCode,
-        pinHash: rawPin, // your clock API compares against pinHash
-        active: false,   // <- awaiting approval
+        employeeCode: rawEmployeeCode,
+        pinHash,
+        role: "WORKER", // non-admin role
+        active: false, // must be approved in Admin
       },
     });
 
     return NextResponse.json(
       {
+        id: user.id,
+        name: user.name,
+        employeeCode: user.employeeCode,
+        email: user.email,
+        active: user.active,
         message:
-          "Account created. You can't clock in yet until a supervisor approves you.",
-        userId: user.id,
+          "Account created. You’ll be able to clock in once an admin approves your account.",
       },
       { status: 201 }
     );
   } catch (err) {
-    console.error("Register API error:", err);
+    console.error("Error in /api/clock/register:", err);
     return NextResponse.json(
-      { error: "Unexpected server error while creating account." },
+      { error: "Failed to create worker account." },
       { status: 500 }
     );
   }
