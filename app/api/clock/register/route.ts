@@ -6,80 +6,43 @@ import bcrypt from "bcryptjs";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    const { name, employeeCode, pin } = body;
 
-    const rawName = (body.name ?? "").trim();
-    const rawEmail = (body.email ?? "").trim();
-    const rawEmployeeCode = (body.employeeCode ?? "").trim();
-    const rawPin = (body.pin ?? "").trim();
-
-    if (!rawName || !rawEmployeeCode || !rawPin) {
+    if (!name || !employeeCode || !pin) {
       return NextResponse.json(
-        {
-          error:
-            "Name, employee code, and PIN are required to create an account.",
-        },
+        { error: "Name, employee code, and PIN are required." },
         { status: 400 }
       );
     }
 
-    // Basic validation: simple code pattern like ABC123, but not too strict
-    if (rawEmployeeCode.length < 3 || rawEmployeeCode.length > 20) {
+    // ✅ enforce 4-digit numeric PIN
+    if (!/^\d{4}$/.test(pin)) {
       return NextResponse.json(
-        { error: "Employee code must be between 3 and 20 characters." },
+        { error: "PIN must be exactly 4 digits (0-9)." },
         { status: 400 }
       );
     }
 
-    if (rawPin.length < 4 || rawPin.length > 12) {
-      return NextResponse.json(
-        { error: "PIN must be between 4 and 12 characters." },
-        { status: 400 }
-      );
-    }
-
-    // Ensure employeeCode is unique
-    const existingByCode = await prisma.user.findUnique({
-      where: { employeeCode: rawEmployeeCode },
+    const existing = await prisma.user.findUnique({
+      where: { employeeCode },
     });
 
-    if (existingByCode) {
+    if (existing) {
       return NextResponse.json(
-        {
-          error:
-            "That employee code is already in use. Check with your office to confirm your assigned code.",
-        },
+        { error: "Employee code already exists." },
         { status: 409 }
       );
     }
 
-    // Optional: ensure email isn't already taken (only if an email is provided)
-    if (rawEmail) {
-      const existingByEmail = await prisma.user.findFirst({
-        where: { email: rawEmail },
-      });
+    const pinHash = await bcrypt.hash(pin, 10);
 
-      if (existingByEmail) {
-        return NextResponse.json(
-          {
-            error:
-              "That email address is already associated with an account. Use a different email or contact your office.",
-          },
-          { status: 409 }
-        );
-      }
-    }
-
-    const pinHash = await bcrypt.hash(rawPin, 10);
-
-    // Create a WORKER-level user, inactive by default (shows in "Pending")
     const user = await prisma.user.create({
       data: {
-        name: rawName,
-        email: rawEmail || null,
-        employeeCode: rawEmployeeCode,
+        name,
+        employeeCode,
+        role: "WORKER",
+        active: false, // waits for approval
         pinHash,
-        role: "WORKER", // non-admin role
-        active: false, // must be approved in Admin
       },
     });
 
@@ -88,17 +51,15 @@ export async function POST(req: NextRequest) {
         id: user.id,
         name: user.name,
         employeeCode: user.employeeCode,
-        email: user.email,
         active: user.active,
-        message:
-          "Account created. You’ll be able to clock in once an admin approves your account.",
+        createdAt: user.createdAt,
       },
       { status: 201 }
     );
   } catch (err) {
-    console.error("Error in /api/clock/register:", err);
+    console.error(err);
     return NextResponse.json(
-      { error: "Failed to create worker account." },
+      { error: "Registration failed." },
       { status: 500 }
     );
   }

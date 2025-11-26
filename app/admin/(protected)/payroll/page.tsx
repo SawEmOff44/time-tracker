@@ -1,39 +1,36 @@
-// app/admin/(protected)/payroll/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type PayrollSummaryRow = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
-  totalHours: number;
-  shiftCount: number;
-};
-
-type PayrollBreakdownRow = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
+type PayrollLocationBreakdown = {
   locationId: string | null;
   locationName: string | null;
-  workDate: string; // YYYY-MM-DD
-  hours: number;
+  totalHours: number;
+  totalWages: number;
 };
 
-type PayrollResponse = {
-  summary: PayrollSummaryRow[];
-  breakdown: PayrollBreakdownRow[];
-  meta: {
-    startDate: string; // Monday
-    endDate: string; // Saturday
-    payday: string; // following Friday
-  };
+type PayrollDayBreakdown = {
+  date: string; // YYYY-MM-DD
+  weekday: string;
+  totalHours: number;
+  totalWages: number;
+  perLocation: PayrollLocationBreakdown[];
 };
 
-// --- Date helpers for the UI (Mon–Sat periods) -----------------------------
+type PayrollRow = {
+  userId: string;
+  name: string;
+  employeeCode: string | null;
+  hourlyRate: number | null;
+  totalHours: number;
+  totalWages: number;
+  shiftCount: number;
+  perLocation: PayrollLocationBreakdown[];
+  perDay: PayrollDayBreakdown[];
+};
 
-// "YYYY-MM-DD" format
+// === Helpers ===============================================================
+
 function formatDateInput(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -41,24 +38,22 @@ function formatDateInput(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-// Parse "YYYY-MM-DD" as local date
-function parseISOToLocalDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
-  return new Date(y, m - 1, d);
-}
-
-// Get Mon–Sat period containing "today"
+// Mon–Sat pay period that contains "today"
 function getCurrentPayPeriod(today = new Date()) {
-  const day = today.getDay(); // 0=Sun,1=Mon,...,6=Sat
-  const daysSinceMonday = (day - 1 + 7) % 7;
+  const day = today.getDay(); // 0=Sun..6=Sat
 
+  // We want Monday as the start.
+  const daysSinceMonday = (day + 6) % 7; // Mon(1)->0, Tue(2)->1, ..., Sun(0)->6
   const start = new Date(
     today.getFullYear(),
     today.getMonth(),
     today.getDate() - daysSinceMonday
   );
-  const end = new Date(start);
-  end.setDate(end.getDate() + 5); // Monday + 5 = Saturday
+  const end = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate() + 5
+  ); // Mon + 5 = Sat
 
   return {
     startDateStr: formatDateInput(start),
@@ -66,98 +61,33 @@ function getCurrentPayPeriod(today = new Date()) {
   };
 }
 
-// Add days to an ISO date string, in local time
-function addDaysISO(dateStr: string, days: number): string {
-  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + days);
-  return formatDateInput(dt);
-}
-
-// CSV export helper
-function downloadCsv(
-  summary: PayrollSummaryRow[],
-  breakdown: PayrollBreakdownRow[],
-  startDate: string,
-  endDate: string
-) {
-  if (summary.length === 0 && breakdown.length === 0) return;
-
-  const header = [
-    "Employee",
-    "Employee Code",
-    "Location",
-    "Work Date",
-    "Hours",
-    "Total Hours (Worker)",
-    "Shift Count (Worker)",
-    "Period Start (Mon)",
-    "Period End (Sat)",
-  ];
-
-  const lines: string[] = [header.join(",")];
-
-  // Make lookup for summary by userId
-  const summaryMap = new Map<string, PayrollSummaryRow>();
-  for (const row of summary) {
-    summaryMap.set(row.userId, row);
-  }
-
-  // For each breakdown row, include summary info
-  for (const row of breakdown) {
-    const s = summaryMap.get(row.userId);
-    const safeName = (row.name || "Unnamed worker").replace(/,/g, " ");
-    const safeCode = (row.employeeCode ?? "").replace(/,/g, " ");
-    const safeLoc = (row.locationName ?? "Unassigned").replace(/,/g, " ");
-
-    const totalHours = s ? s.totalHours.toFixed(2) : "";
-    const shiftCount = s ? s.shiftCount : "";
-
-    lines.push(
-      [
-        `"${safeName}"`,
-        `"${safeCode}"`,
-        `"${safeLoc}"`,
-        row.workDate,
-        row.hours.toFixed(2),
-        totalHours,
-        shiftCount,
-        startDate,
-        endDate,
-      ].join(",")
-    );
-  }
-
-  const csvContent = lines.join("\n");
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `payroll_${startDate}_to_${endDate}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+// ==========================================================================
 
 export default function AdminPayrollPage() {
   const { startDateStr, endDateStr } = getCurrentPayPeriod();
 
   const [startDate, setStartDate] = useState(startDateStr);
   const [endDate, setEndDate] = useState(endDateStr);
-
-  const [summary, setSummary] = useState<PayrollSummaryRow[]>([]);
-  const [breakdown, setBreakdown] = useState<PayrollBreakdownRow[]>([]);
-  const [metaPayday, setMetaPayday] = useState<string | null>(null);
-
+  const [rows, setRows] = useState<PayrollRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [totalHours, setTotalHours] = useState<number>(0);
+  const [totalWages, setTotalWages] = useState<number>(0);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 
-  // Move by whole 7-day pay periods (Mon–Sat)
+  // shift forward/back by 7-day pay period (Mon–Sat)
   function shiftPayPeriod(offsetWeeks: number) {
-    const newStart = addDaysISO(startDate, offsetWeeks * 7);
-    const newEnd = addDaysISO(newStart, 5); // Monday + 5 = Saturday
-    setStartDate(newStart);
-    setEndDate(newEnd);
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    start.setDate(start.getDate() + offsetWeeks * 7);
+    end.setDate(end.getDate() + offsetWeeks * 7);
+
+    const newStartStr = formatDateInput(start);
+    const newEndStr = formatDateInput(end);
+
+    setStartDate(newStartStr);
+    setEndDate(newEndStr);
   }
 
   async function loadPayroll() {
@@ -178,25 +108,32 @@ export default function AdminPayrollPage() {
         throw new Error("Failed to load payroll data");
       }
 
-      const data = (await res.json()) as PayrollResponse;
+      const data = (await res.json()) as PayrollRow[];
 
-      setSummary(data.summary);
-      setBreakdown(data.breakdown);
-      setMetaPayday(data.meta?.payday ?? null);
+      setRows(data);
 
-      const sum = data.summary.reduce(
-        (acc, row) =>
-          acc + (typeof row.totalHours === "number" ? row.totalHours : 0),
+      const hoursSum = data.reduce(
+        (acc, row) => acc + (row.totalHours ?? 0),
         0
       );
-      setTotalHours(Number(sum.toFixed(2)));
+      const wagesSum = data.reduce(
+        (acc, row) => acc + (row.totalWages ?? 0),
+        0
+      );
+
+      setTotalHours(Number(hoursSum.toFixed(2)));
+      setTotalWages(Number(wagesSum.toFixed(2)));
+
+      // Reset selection if current selection vanished
+      if (selectedUserId && !data.find((r) => r.userId === selectedUserId)) {
+        setSelectedUserId(null);
+      }
     } catch (err) {
       console.error(err);
       setError("Could not load payroll data for this period.");
-      setSummary([]);
-      setBreakdown([]);
+      setRows([]);
       setTotalHours(0);
-      setMetaPayday(null);
+      setTotalWages(0);
     } finally {
       setLoading(false);
     }
@@ -208,32 +145,70 @@ export default function AdminPayrollPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const periodLabel = (() => {
+  const periodLabel = useMemo(() => {
     if (!startDate || !endDate) return "";
-    const s = parseISOToLocalDate(startDate);
-    const e = parseISOToLocalDate(endDate);
-
+    const s = new Date(startDate);
+    const e = new Date(endDate);
     const fmt = (d: Date) =>
       d.toLocaleDateString("en-US", {
-        weekday: "short",
         month: "2-digit",
         day: "2-digit",
         year: "numeric",
       });
-
     return `${fmt(s)} – ${fmt(e)} (Mon–Sat)`;
-  })();
+  }, [startDate, endDate]);
 
-  const paydayLabel = (() => {
-    if (!metaPayday) return "";
-    const d = parseISOToLocalDate(metaPayday);
-    return d.toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "2-digit",
-      day: "2-digit",
-      year: "numeric",
-    });
-  })();
+  const selectedRow = useMemo(
+    () => rows.find((r) => r.userId === selectedUserId) ?? null,
+    [rows, selectedUserId]
+  );
+
+  // CSV export (flat: user, date, weekday, location, hours, wages)
+  function exportCsv() {
+    if (rows.length === 0) return;
+
+    const lines: string[] = [];
+    lines.push(
+      [
+        "Employee",
+        "Code",
+        "Date",
+        "Weekday",
+        "Location",
+        "Hours",
+        "Hourly Rate",
+        "Wages",
+      ].join(",")
+    );
+
+    for (const row of rows) {
+      for (const day of row.perDay) {
+        for (const loc of day.perLocation) {
+          lines.push(
+            [
+              JSON.stringify(row.name ?? ""),
+              JSON.stringify(row.employeeCode ?? ""),
+              day.date,
+              day.weekday,
+              JSON.stringify(loc.locationName ?? ""),
+              day.totalHours.toFixed(2),
+              (row.hourlyRate ?? 0).toFixed(2),
+              loc.totalWages.toFixed(2),
+            ].join(",")
+          );
+        }
+      }
+    }
+
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payroll_${startDate}_${endDate}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className="space-y-8">
@@ -241,11 +216,12 @@ export default function AdminPayrollPage() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-50">Payroll</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Monday–Saturday pay period. Payday is the following Friday.
+          Review total hours and wages by worker for the selected pay period
+          (Monday through Saturday).
         </p>
       </div>
 
-      {/* Filters & actions */}
+      {/* Filters / summary */}
       <div className="card bg-slate-900/80 border border-slate-700/80">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
@@ -253,11 +229,6 @@ export default function AdminPayrollPage() {
               Pay period
             </p>
             <p className="mt-1 text-sm text-slate-100">{periodLabel}</p>
-            {paydayLabel && (
-              <p className="mt-1 text-xs text-amber-300">
-                Payday: {paydayLabel}
-              </p>
-            )}
           </div>
 
           <div className="flex flex-col gap-3 md:flex-row md:items-end">
@@ -309,52 +280,50 @@ export default function AdminPayrollPage() {
             >
               {loading ? "Loading…" : "Apply"}
             </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                downloadCsv(summary, breakdown, startDate, endDate)
-              }
-              disabled={summary.length === 0 && breakdown.length === 0}
-              className="rounded-full border border-amber-400/70 px-4 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-400/10 disabled:opacity-40"
-            >
-              Export CSV
-            </button>
           </div>
         </div>
 
-        {/* Error */}
         {error && (
           <p className="mt-3 text-xs text-red-300">
             {error}
           </p>
         )}
 
-        {/* Summary */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3">
           <p className="text-xs text-slate-400">
-            {summary.length === 0
+            {rows.length === 0
               ? "No hours recorded in this period."
-              : `${summary.length} worker${
-                  summary.length === 1 ? "" : "s"
-                } with hours in this period.`}
+              : `${rows.length} worker${rows.length === 1 ? "" : "s"} with hours in this period.`}
           </p>
-          <p className="text-xs font-semibold text-slate-100">
-            Total hours this period:{" "}
-            <span className="text-amber-300">{totalHours.toFixed(2)}h</span>
+          <p className="text-xs font-semibold text-slate-100 space-x-4">
+            <span>
+              Total hours:{" "}
+              <span className="text-amber-300">{totalHours.toFixed(2)}h</span>
+            </span>
+            <span>
+              Total wages:{" "}
+              <span className="text-emerald-300">
+                ${totalWages.toFixed(2)}
+              </span>
+            </span>
           </p>
         </div>
       </div>
 
-      {/* Table 1: Summary by worker */}
+      {/* Main table + CSV */}
       <div className="card bg-slate-900/80 border border-slate-700/80">
         <div className="mb-3 flex items-center justify-between gap-4">
           <h2 className="text-sm font-semibold text-slate-100">
-            Hours by worker
+            Hours & wages by worker
           </h2>
-          <p className="text-[11px] text-slate-400">
-            Aggregated per worker for this pay period.
-          </p>
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={rows.length === 0}
+            className="rounded-full border border-slate-600 px-3 py-1.5 text-[11px] font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-50"
+          >
+            Export CSV
+          </button>
         </div>
 
         <div className="mt-2 overflow-x-auto">
@@ -365,13 +334,14 @@ export default function AdminPayrollPage() {
                 <th className="px-3 py-2 text-left">Code</th>
                 <th className="px-3 py-2 text-right">Shift count</th>
                 <th className="px-3 py-2 text-right">Total hours</th>
+                <th className="px-3 py-2 text-right">Total wages</th>
               </tr>
             </thead>
             <tbody>
-              {summary.length === 0 && !loading && (
+              {rows.length === 0 && !loading && (
                 <tr>
                   <td
-                    colSpan={4}
+                    colSpan={5}
                     className="px-3 py-6 text-center text-slate-400"
                   >
                     No data for this period.
@@ -379,96 +349,135 @@ export default function AdminPayrollPage() {
                 </tr>
               )}
 
-              {summary.map((row) => (
-                <tr key={row.userId} className="border-b border-slate-800/80">
-                  <td className="px-3 py-2 align-middle">
-                    <div className="text-sm text-slate-50">
-                      {row.name || "Unnamed worker"}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 align-middle text-slate-200">
-                    {row.employeeCode ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-slate-200">
-                    {row.shiftCount}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-slate-50">
-                    {row.totalHours.toFixed(2)}h
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Table 2: Detailed breakdown by person / location / day */}
-      <div className="card bg-slate-900/80 border border-slate-700/80">
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-slate-100">
-            Daily hours by job site
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Broken down by worker, location, and calendar day.
-          </p>
-        </div>
-
-        <div className="mt-2 overflow-x-auto">
-          <table className="admin-table min-w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-800/80">
-                <th className="px-3 py-2 text-left">Employee</th>
-                <th className="px-3 py-2 text-left">Code</th>
-                <th className="px-3 py-2 text-left">Location</th>
-                <th className="px-3 py-2 text-left">Date</th>
-                <th className="px-3 py-2 text-right">Hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {breakdown.length === 0 && !loading && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-3 py-6 text-center text-slate-400"
+              {rows.map((row) => {
+                const isSelected = row.userId === selectedUserId;
+                return (
+                  <tr
+                    key={row.userId}
+                    className={`border-b border-slate-800/80 cursor-pointer transition ${
+                      isSelected ? "bg-slate-800/80" : "hover:bg-slate-800/40"
+                    }`}
+                    onClick={() =>
+                      setSelectedUserId(
+                        isSelected ? null : row.userId
+                      )
+                    }
                   >
-                    No detailed records for this period.
-                  </td>
-                </tr>
-              )}
-
-              {breakdown.map((row, idx) => (
-                <tr key={`${row.userId}-${row.locationId}-${row.workDate}-${idx}`} className="border-b border-slate-800/80">
-                  <td className="px-3 py-2 align-middle">
-                    <div className="text-sm text-slate-50">
-                      {row.name || "Unnamed worker"}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 align-middle text-slate-200">
-                    {row.employeeCode ?? "—"}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-slate-200">
-                    {row.locationName ?? "Unassigned"}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-slate-300">
-                    {parseISOToLocalDate(row.workDate).toLocaleDateString(
-                      "en-US",
-                      {
-                        weekday: "short",
-                        month: "2-digit",
-                        day: "2-digit",
-                        year: "numeric",
-                      }
-                    )}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-slate-50">
-                    {row.hours.toFixed(2)}h
-                  </td>
-                </tr>
-              ))}
+                    <td className="px-3 py-2 align-middle">
+                      <div className="text-sm text-slate-50">
+                        {row.name || "Unnamed worker"}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 align-middle text-slate-200">
+                      {row.employeeCode ?? "—"}
+                    </td>
+                    <td className="px-3 py-2 align-middle text-right text-slate-200">
+                      {row.shiftCount}
+                    </td>
+                    <td className="px-3 py-2 align-middle text-right text-slate-50">
+                      {row.totalHours.toFixed(2)}h
+                    </td>
+                    <td className="px-3 py-2 align-middle text-right text-emerald-300">
+                      ${row.totalWages.toFixed(2)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Breakdown for selected worker */}
+      {selectedRow && (
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* By location */}
+          <div className="card bg-slate-900/80 border border-slate-700/80">
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">
+              {selectedRow.name} – by job site
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="admin-table min-w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800/80">
+                    <th className="px-3 py-2 text-left">Location</th>
+                    <th className="px-3 py-2 text-right">Hours</th>
+                    <th className="px-3 py-2 text-right">Wages</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRow.perLocation.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-3 py-4 text-center text-slate-400"
+                      >
+                        No shifts in this period.
+                      </td>
+                    </tr>
+                  )}
+                  {selectedRow.perLocation.map((loc) => (
+                    <tr key={loc.locationId ?? loc.locationName ?? "adhoc"}>
+                      <td className="px-3 py-2 align-middle text-slate-50">
+                        {loc.locationName ?? "ADHOC"}
+                      </td>
+                      <td className="px-3 py-2 align-middle text-right text-slate-100">
+                        {loc.totalHours.toFixed(2)}h
+                      </td>
+                      <td className="px-3 py-2 align-middle text-right text-emerald-300">
+                        ${loc.totalWages.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* By day */}
+          <div className="card bg-slate-900/80 border border-slate-700/80">
+            <h3 className="text-sm font-semibold text-slate-100 mb-2">
+              {selectedRow.name} – by day
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="admin-table min-w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800/80">
+                    <th className="px-3 py-2 text-left">Date</th>
+                    <th className="px-3 py-2 text-right">Hours</th>
+                    <th className="px-3 py-2 text-right">Wages</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedRow.perDay.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="px-3 py-4 text-center text-slate-400"
+                      >
+                        No shifts in this period.
+                      </td>
+                    </tr>
+                  )}
+                  {selectedRow.perDay.map((day) => (
+                    <tr key={day.date}>
+                      <td className="px-3 py-2 align-middle text-slate-50">
+                        {day.weekday} {day.date}
+                      </td>
+                      <td className="px-3 py-2 align-middle text-right text-slate-100">
+                        {day.totalHours.toFixed(2)}h
+                      </td>
+                      <td className="px-3 py-2 align-middle text-right text-emerald-300">
+                        ${day.totalWages.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

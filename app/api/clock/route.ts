@@ -1,67 +1,67 @@
 // app/api/clock/route.ts
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import bcrypt from "bcryptjs";
 
-type ClockBody = {
-  employeeCode?: string;
-  pin?: string;
-  lat?: number;
-  lng?: number;
+type ClockResponse = {
+  status: "clocked_in" | "clocked_out";
+  message: string;
+  locationName: string | null;
+  totalHoursThisPeriod: number | null;
 };
 
-// Haversine distance in meters
-function haversineDistanceMeters(
+// Simple haversine distance in meters
+function distanceInMeters(
   lat1: number,
-  lon1: number,
+  lng1: number,
   lat2: number,
-  lon2: number
+  lng2: number
 ): number {
   const R = 6371e3; // meters
-  const toRad = (v: number) => (v * Math.PI) / 180;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
 
   const φ1 = toRad(lat1);
   const φ2 = toRad(lat2);
   const Δφ = toRad(lat2 - lat1);
-  const Δλ = toRad(lon2 - lon1);
+  const Δλ = toRad(lng2 - lng1);
 
   const a =
     Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) *
-      Math.cos(φ2) *
-      Math.sin(Δλ / 2) *
-      Math.sin(Δλ / 2);
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
 
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
   return R * c;
 }
 
-// Current pay period = current calendar week (Sunday–Saturday)
-function getCurrentWeekRange() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  // JS getDay: 0 = Sunday
-  const day = start.getDay();
-  start.setDate(start.getDate() - day); // go back to Sunday
+// Get current week range for Mon–Sat around `base`
+function getCurrentWeekMonSat(base = new Date()) {
+  const d = new Date(base);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+
+  // How many days since Monday?
+  const daysSinceMonday = (day + 6) % 7; // Mon=1 -> 0, Tue=2 ->1, ..., Sun=0 ->6
+  const start = new Date(d);
+  start.setDate(start.getDate() - daysSinceMonday); // Monday
 
   const end = new Date(start);
-  end.setDate(end.getDate() + 7); // next Sunday (exclusive)
+  end.setDate(end.getDate() + 5); // Saturday
+  end.setHours(23, 59, 59, 999);
 
   return { start, end };
 }
 
-async function computeWeeklyHours(userId: string) {
-  const { start, end } = getCurrentWeekRange();
+async function computeWeeklyHours(userId: string): Promise<number> {
+  const { start, end } = getCurrentWeekMonSat();
 
-  const weeklyShifts = await prisma.shift.findMany({
+  const shifts = await prisma.shift.findMany({
     where: {
       userId,
-      clockIn: { gte: start },
-      clockOut: { not: null, lt: end },
+      clockOut: { not: null },
+      clockIn: {
+        gte: start,
+        lte: end,
+      },
     },
     select: {
       clockIn: true,
@@ -70,13 +70,10 @@ async function computeWeeklyHours(userId: string) {
   });
 
   let totalMs = 0;
-  for (const s of weeklyShifts) {
-    if (!s.clockIn || !s.clockOut) continue;
-    const startMs = new Date(s.clockIn).getTime();
-    const endMs = new Date(s.clockOut).getTime();
-    if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs)
-      continue;
-    totalMs += endMs - startMs;
+  for (const s of shifts) {
+    if (!s.clockOut) continue;
+    const ms = s.clockOut.getTime() - s.clockIn.getTime();
+    if (ms > 0) totalMs += ms;
   }
 
   const hours = totalMs / (1000 * 60 * 60);
@@ -85,9 +82,14 @@ async function computeWeeklyHours(userId: string) {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as ClockBody;
+    const body = await req.json();
 
-    const { employeeCode, pin, lat, lng } = body;
+    const employeeCode: string | undefined = body.employeeCode?.trim();
+    const pin: string | undefined = body.pin?.trim();
+    const lat: number | null =
+      typeof body.lat === "number" ? body.lat : null;
+    const lng: number | null =
+      typeof body.lng === "number" ? body.lng : null;
 
     if (!employeeCode || !pin) {
       return NextResponse.json(
@@ -96,131 +98,150 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (lat == null || lng == null) {
-      return NextResponse.json(
-        { error: "GPS location (lat/lng) is required." },
-        { status: 400 }
-      );
-    }
-
-    // 1. Find the user by employee code
+    // --- Find active user by employeeCode ------------------------------
     const user = await prisma.user.findFirst({
       where: {
-        employeeCode,
+        employeeCode: employeeCode,
         active: true,
       },
     });
 
     if (!user) {
       return NextResponse.json(
-        { error: "Invalid employee code or PIN" },
-        { status: 401 }
+        { error: "Employee code not found or inactive." },
+        { status: 400 }
       );
     }
 
-    // 2. Simple PIN check (comparing against pinHash field for now)
-    if (user.pinHash !== pin) {
+    if (!user.pinHash) {
       return NextResponse.json(
-        { error: "Invalid employee code or PIN" },
-        { status: 401 }
+        { error: "No PIN is set for this user." },
+        { status: 400 }
       );
     }
 
-    // 3. Find active locations & determine closest match
-    const locations = await prisma.location.findMany({
-      where: { active: true },
-    });
-
-    let matchedLocation: (typeof locations)[number] | null = null;
-    let matchedDistance = Number.POSITIVE_INFINITY;
-
-    for (const loc of locations) {
-      if (loc.radiusMeters <= 0) continue; // skip ADHOC / zero-radius
-      const d = haversineDistanceMeters(
-        lat,
-        lng,
-        loc.lat,
-        loc.lng
+    // --- Proper PIN check against hashed pinHash -----------------------
+    const pinOk = await bcrypt.compare(pin, user.pinHash);
+    if (!pinOk) {
+      return NextResponse.json(
+        { error: "Invalid PIN." },
+        { status: 400 }
       );
-      if (d <= loc.radiusMeters && d < matchedDistance) {
-        matchedLocation = loc;
-        matchedDistance = d;
-      }
     }
 
-    // ADHOC fallback = location with radiusMeters == 0 (if present)
-    let finalLocation = matchedLocation;
-    if (!finalLocation) {
-      const adhoc = locations.find((l) => l.radiusMeters === 0);
-      if (adhoc) {
-        finalLocation = adhoc;
-      }
-    }
+    const now = new Date();
 
-    // 4. Check for open shift
+    // --- Determine if they are currently clocked in --------------------
     const openShift = await prisma.shift.findFirst({
       where: {
         userId: user.id,
         clockOut: null,
       },
-      orderBy: { clockIn: "desc" },
+      orderBy: {
+        clockIn: "desc",
+      },
     });
 
-    let shiftResult;
-    let status: "clocked_in" | "clocked_out";
+    // --- Helper: resolve location from GPS, if provided ---------------
+    let resolvedLocationId: string | null = null;
+    let resolvedLocationName: string | null = null;
+
+    if (lat != null && lng != null) {
+      const locations = await prisma.location.findMany({
+        where: { active: true },
+      });
+
+      let best: { id: string; name: string; dist: number; radius: number } | null =
+        null;
+
+      for (const loc of locations) {
+        const d = distanceInMeters(lat, lng, loc.lat, loc.lng);
+        if (d <= loc.radiusMeters) {
+          if (!best || d < best.dist) {
+            best = {
+              id: loc.id,
+              name: loc.name,
+              dist: d,
+              radius: loc.radiusMeters,
+            };
+          }
+        }
+      }
+
+      if (best) {
+        resolvedLocationId = best.id;
+        resolvedLocationName = best.name;
+      } else {
+        resolvedLocationId = null;
+        resolvedLocationName = "ADHOC job site";
+      }
+    } else {
+      // No GPS, treat as ADHOC
+      resolvedLocationId = null;
+      resolvedLocationName = "ADHOC job site";
+    }
+
+    let response: ClockResponse;
 
     if (openShift) {
-      // CLOCK OUT
-      shiftResult = await prisma.shift.update({
+      // ---------- CLOCK OUT -------------------------------------------
+      // Use the existing shift's location for label
+      let locationName: string | null = resolvedLocationName;
+
+      if (openShift.locationId) {
+        const loc = await prisma.location.findUnique({
+          where: { id: openShift.locationId },
+        });
+        if (loc) {
+          locationName = loc.name;
+        }
+      }
+
+      await prisma.shift.update({
         where: { id: openShift.id },
         data: {
-          clockOut: new Date(),
+          clockOut: now,
           clockOutLat: lat,
           clockOutLng: lng,
         },
-        include: {
-          user: true,
-          location: true,
-        },
       });
 
-      status = "clocked_out";
+      const weeklyHours = await computeWeeklyHours(user.id);
+
+      response = {
+        status: "clocked_out",
+        message: "Clock-out recorded.",
+        locationName: locationName,
+        totalHoursThisPeriod: weeklyHours,
+      };
     } else {
-      // CREATE NEW SHIFT (CLOCK IN)
-      shiftResult = await prisma.shift.create({
+      // ---------- CLOCK IN --------------------------------------------
+      const newShift = await prisma.shift.create({
         data: {
           userId: user.id,
-          locationId: finalLocation ? finalLocation.id : null,
-          clockIn: new Date(),
+          locationId: resolvedLocationId,
+          clockIn: now,
           clockInLat: lat,
           clockInLng: lng,
         },
-        include: {
-          user: true,
-          location: true,
-        },
       });
 
-      status = "clocked_in";
+      // fresh weekly hours (will include this shift later, once clocked out)
+      const weeklyHours = await computeWeeklyHours(user.id);
+
+      response = {
+        status: "clocked_in",
+        message: "Clock-in recorded.",
+        locationName: resolvedLocationName,
+        totalHoursThisPeriod: weeklyHours,
+      };
     }
 
-    // 5. Compute weekly hours AFTER this action
-    const totalHoursThisPeriod = await computeWeeklyHours(user.id);
-
-    return NextResponse.json({
-      status,
-      message:
-        status === "clocked_in"
-          ? "Clock-in recorded"
-          : "Clock-out recorded",
-      shift: shiftResult,
-      locationName: shiftResult.location?.name ?? null,
-      totalHoursThisPeriod,
-    });
+    return NextResponse.json(response, { status: 200 });
   } catch (err) {
-    console.error("Clock API error:", err);
+    console.error("Error in /api/clock", err);
     return NextResponse.json(
-      { error: "Unexpected server error while clocking in/out." },
+      { error: "Unexpected error while processing clock request." },
       { status: 500 }
     );
   }

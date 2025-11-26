@@ -1,6 +1,7 @@
 // app/api/admin/employees/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import bcrypt from "bcryptjs";
 
 type RouteParams = {
   params: { id: string };
@@ -29,6 +30,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
       employeeCode: user.employeeCode,
       active: user.active,
       createdAt: user.createdAt.toISOString(),
+      // Note: we never return pinHash or PIN
     });
   } catch (err) {
     console.error("Error loading employee", err);
@@ -39,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
   }
 }
 
-// PATCH – update name / email / employeeCode / active
+// PATCH – update name / email / employeeCode / active (+ optional PIN reset)
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
   const { id } = params;
 
@@ -49,6 +51,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       email?: string | null;
       employeeCode?: string | null;
       active?: boolean;
+      pin?: string; // ✅ optional PIN provided by admin
     };
 
     const data: {
@@ -56,12 +59,15 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       email?: string | null;
       employeeCode?: string | null;
       active?: boolean;
+      pinHash?: string | null;
     } = {};
 
     if (typeof body.name === "string") data.name = body.name.trim();
+
     if (typeof body.email === "string" || body.email === null) {
       data.email = body.email ? body.email.trim() : null;
     }
+
     if (
       typeof body.employeeCode === "string" ||
       body.employeeCode === null
@@ -70,7 +76,26 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         ? body.employeeCode.trim()
         : null;
     }
-    if (typeof body.active === "boolean") data.active = body.active;
+
+    if (typeof body.active === "boolean") {
+      data.active = body.active;
+    }
+
+    // ✅ Handle PIN reset if provided
+    if (typeof body.pin === "string" && body.pin.trim().length > 0) {
+      const trimmedPin = body.pin.trim();
+
+      // Must be exactly 4 numeric digits
+      if (!/^\d{4}$/.test(trimmedPin)) {
+        return NextResponse.json(
+          { error: "PIN must be exactly 4 digits (0–9)." },
+          { status: 400 }
+        );
+      }
+
+      const pinHash = await bcrypt.hash(trimmedPin, 10);
+      data.pinHash = pinHash;
+    }
 
     if (Object.keys(data).length === 0) {
       return NextResponse.json(

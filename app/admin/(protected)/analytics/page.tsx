@@ -1,350 +1,279 @@
-// app/admin/(protected)/analytics/page.tsx
-import { prisma } from "@/lib/prisma";
+"use client";
 
-// Sunday–Saturday current week (local time)
-function getCurrentWeekRange() {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(0, 0, 0, 0);
-  const day = start.getDay(); // 0 = Sunday
-  start.setDate(start.getDate() - day); // go back to Sunday
+import { useEffect, useMemo, useState } from "react";
 
-  const end = new Date(start);
-  end.setDate(end.getDate() + 7); // next Sunday (exclusive)
-  return { start, end };
+type JobSiteRow = {
+  locationId: string | null;
+  locationName: string | null;
+  totalHours: number;
+  totalWages: number;
+  shiftCount: number;
+  workerCount: number;
+};
+
+function formatDateInput(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-// Current calendar month
-function getCurrentMonthRange() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), 1);
-  const end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  return { start, end };
-}
-
-function diffHours(clockIn: Date | null, clockOut: Date | null): number {
-  if (!clockIn || !clockOut) return 0;
-  const startMs = new Date(clockIn).getTime();
-  const endMs = new Date(clockOut).getTime();
-  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs) return 0;
-  const hours = (endMs - startMs) / (1000 * 60 * 60);
-  return Number(hours.toFixed(2));
-}
-
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-export default async function AnalyticsPage() {
-  const { start: weekStart, end: weekEnd } = getCurrentWeekRange();
-  const { start: monthStart, end: monthEnd } = getCurrentMonthRange();
-
-  const [weeklyShifts, monthlyShifts] = await Promise.all([
-    prisma.shift.findMany({
-      where: {
-        clockIn: { gte: weekStart },
-        clockOut: { not: null, lt: weekEnd },
-      },
-      select: { clockIn: true, clockOut: true },
-    }),
-    prisma.shift.findMany({
-      where: {
-        clockIn: { gte: monthStart, lt: monthEnd },
-        clockOut: { not: null },
-      },
-      include: {
-        user: true,
-        location: true,
-      },
-    }),
-  ]);
-
-  // ---- Weekly hours by day (Sun–Sat) ----
-  const weeklyBuckets = DAY_LABELS.map((label) => ({
-    label,
-    hours: 0,
-  }));
-
-  for (const shift of weeklyShifts) {
-    const hours = diffHours(shift.clockIn, shift.clockOut);
-    if (hours <= 0) continue;
-    const dayIndex = new Date(shift.clockIn).getDay(); // 0–6
-    weeklyBuckets[dayIndex].hours += hours;
-  }
-
-  const totalHoursThisWeek = weeklyBuckets.reduce((sum, d) => sum + d.hours, 0);
-  const maxDayHours = weeklyBuckets.reduce(
-    (max, d) => (d.hours > max ? d.hours : max),
-    0
+// same Mon–Sat pay period as payroll
+function getCurrentPayPeriod(today = new Date()) {
+  const day = today.getDay(); // 0=Sun..6=Sat
+  const daysSinceMonday = (day + 6) % 7;
+  const start = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - daysSinceMonday
   );
-  const scaleMax = maxDayHours > 0 ? maxDayHours : 1; // avoid 0/0
+  const end = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate() + 5
+  );
+  return {
+    startDateStr: formatDateInput(start),
+    endDateStr: formatDateInput(end),
+  };
+}
 
-  // ---- Monthly totals & ADHOC / locations / employees ----
-  let totalHoursThisMonth = 0;
-  let adhocShiftCount = 0;
+export default function AdminAnalyticsPage() {
+  const { startDateStr, endDateStr } = getCurrentPayPeriod();
 
-  const locationTotals = new Map<
-    string,
-    { name: string; hours: number; shiftCount: number }
-  >();
+  const [startDate, setStartDate] = useState(startDateStr);
+  const [endDate, setEndDate] = useState(endDateStr);
+  const [rows, setRows] = useState<JobSiteRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const employeeTotals = new Map<
-    string,
-    { name: string; code: string | null; hours: number }
-  >();
+  const totalHours = useMemo(
+    () =>
+      rows.reduce((acc, r) => acc + (r.totalHours ?? 0), 0),
+    [rows]
+  );
+  const totalWages = useMemo(
+    () =>
+      rows.reduce((acc, r) => acc + (r.totalWages ?? 0), 0),
+    [rows]
+  );
 
-  for (const shift of monthlyShifts) {
-    const hours = diffHours(shift.clockIn, shift.clockOut);
-    if (hours <= 0) continue;
+  function shiftPeriod(offsetWeeks: number) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
 
-    totalHoursThisMonth += hours;
+    start.setDate(start.getDate() + offsetWeeks * 7);
+    end.setDate(end.getDate() + offsetWeeks * 7);
 
-    // ADHOC = radiusMeters === 0
-    if (shift.location && shift.location.radiusMeters === 0) {
-      adhocShiftCount += 1;
-    }
+    setStartDate(formatDateInput(start));
+    setEndDate(formatDateInput(end));
+  }
 
-    // per-location totals
-    if (shift.location) {
-      const locKey = shift.location.id;
-      const locExisting = locationTotals.get(locKey);
-      if (locExisting) {
-        locExisting.hours += hours;
-        locExisting.shiftCount += 1;
-      } else {
-        locationTotals.set(locKey, {
-          name: shift.location.name,
-          hours,
-          shiftCount: 1,
-        });
+  async function load() {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const params = new URLSearchParams({
+        start: startDate,
+        end: endDate,
+      });
+
+      const res = await fetch(
+        `/api/admin/analytics/job-sites?${params.toString()}`
+      );
+
+      if (!res.ok) {
+        throw new Error("Failed");
       }
-    }
 
-    // per-employee totals
-    if (shift.user) {
-      const userKey = shift.user.id;
-      const empExisting = employeeTotals.get(userKey);
-      if (empExisting) {
-        empExisting.hours += hours;
-      } else {
-        employeeTotals.set(userKey, {
-          name: shift.user.name,
-          code: shift.user.employeeCode,
-          hours,
-        });
-      }
+      const data = (await res.json()) as JobSiteRow[];
+      setRows(data);
+    } catch (err) {
+      console.error(err);
+      setError("Could not load job-site analytics for this period.");
+      setRows([]);
+    } finally {
+      setLoading(false);
     }
   }
 
-  const activeJobSitesThisMonth = locationTotals.size;
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const topEmployees = Array.from(employeeTotals.values())
-    .sort((a, b) => b.hours - a.hours)
-    .slice(0, 3);
-
-  const topLocations = Array.from(locationTotals.values())
-    .sort((a, b) => b.hours - a.hours)
-    .slice(0, 3);
+  const periodLabel = useMemo(() => {
+    const s = new Date(startDate);
+    const e = new Date(endDate);
+    const fmt = (d: Date) =>
+      d.toLocaleDateString("en-US", {
+        month: "2-digit",
+        day: "2-digit",
+        year: "numeric",
+      });
+    return `${fmt(s)} – ${fmt(e)} (Mon–Sat)`;
+  }, [startDate, endDate]);
 
   return (
-    <div className="space-y-8 text-slate-100">
-      {/* HEADER */}
+    <div className="space-y-8">
+      {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-slate-50">Analytics</h1>
         <p className="mt-1 text-sm text-slate-400">
-          Deeper insight into hours, job site usage, and ADHOC activity.
+          Job-site hours and labor cost for the selected pay period (Monday
+          through Saturday).
         </p>
       </div>
 
-      {/* TOP SUMMARY CARDS */}
-      <div className="grid gap-4 md:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
-            Total hours this week
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-slate-50">
-            {totalHoursThisWeek.toFixed(2)}
-          </div>
-          <p className="mt-1 text-xs text-slate-500">Sunday–Saturday</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
-            Total hours this month
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-slate-50">
-            {totalHoursThisMonth.toFixed(2)}
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            All completed shifts this month.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/80 px-4 py-3 shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
-            Active job sites (this month)
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-slate-50">
-            {activeJobSitesThisMonth}
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Locations with at least one shift.
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-amber-500/30 bg-amber-950/600/10 px-4 py-3 shadow-sm">
-          <div className="text-xs font-medium uppercase tracking-wide text-amber-300">
-            ADHOC shifts this month
-          </div>
-          <div className="mt-2 text-2xl font-semibold text-amber-100">
-            {adhocShiftCount}
-          </div>
-          <p className="mt-1 text-xs text-amber-200">
-            Clock-ins at zero-radius locations.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* WEEKLY BAR CHART */}
-        <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
-          <div className="flex items-baseline justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-50">
-                Weekly hours by day
-              </h2>
-              <p className="text-xs text-slate-400">
-                Aggregate hours worked this week.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-6 flex h-40 items-end justify-between gap-3">
-            {weeklyBuckets.map((day) => {
-              const pct = (day.hours / scaleMax) * 100;
-              return (
-                <div
-                  key={day.label}
-                  className="flex flex-1 flex-col items-center gap-2"
-                >
-                  <div className="flex h-28 w-7 items-end rounded-full bg-slate-800 overflow-hidden">
-                    {/* inner bar */}
-                    <div
-                      className="w-full rounded-full bg-amber-400 transition-all"
-                      style={{ height: `${pct}%` }}
-                    />
-                  </div>
-                  <div className="text-[11px] font-medium text-slate-300">
-                    {day.hours.toFixed(2)}h
-                  </div>
-                  <div className="text-[11px] uppercase tracking-wide text-slate-500">
-                    {day.label}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* LOCATION UTILIZATION */}
-        <div className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
+      {/* Filters */}
+      <div className="card bg-slate-900/80 border border-slate-700/80">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-slate-50">
-              Location utilization
-            </h2>
-            <p className="text-xs text-slate-400">
-              Shift volume by job site this month.
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Pay period
             </p>
+            <p className="mt-1 text-sm text-slate-100">{periodLabel}</p>
           </div>
 
-          <div className="space-y-3">
-            {topLocations.length === 0 && (
-              <p className="text-xs text-slate-500">No shifts this month.</p>
-            )}
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Start (Monday)
+              </label>
+              <input
+                type="date"
+                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
 
-            {topLocations.map((loc) => {
-              const pct =
-                totalHoursThisMonth > 0
-                  ? (loc.hours / totalHoursThisMonth) * 100
-                  : 0;
-              return (
-                <div key={loc.name} className="space-y-1">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-medium text-slate-100">
-                      {loc.name}
-                    </span>
-                    <span className="text-slate-400">
-                      {loc.hours.toFixed(2)}h
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-slate-800">
-                    <div
-                      className="h-2 rounded-full bg-sky-400"
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+            <div className="flex flex-col">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                End (Saturday)
+              </label>
+              <input
+                type="date"
+                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => shiftPeriod(-1)}
+              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              ◀ Previous period
+            </button>
+
+            <button
+              type="button"
+              onClick={() => shiftPeriod(1)}
+              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
+            >
+              Next period ▶
+            </button>
+
+            <button
+              type="button"
+              onClick={load}
+              disabled={loading}
+              className="rounded-full bg-amber-400 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
+            >
+              {loading ? "Loading…" : "Apply"}
+            </button>
           </div>
+        </div>
+
+        {error && (
+          <p className="mt-3 text-xs text-red-300">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3">
+          <p className="text-xs text-slate-400">
+            {rows.length === 0
+              ? "No hours recorded in this period."
+              : `${rows.length} job site${
+                  rows.length === 1 ? "" : "s"
+                } with hours in this period.`}
+          </p>
+          <p className="text-xs font-semibold text-slate-100 space-x-4">
+            <span>
+              Total hours:{" "}
+              <span className="text-amber-300">
+                {totalHours.toFixed(2)}h
+              </span>
+            </span>
+            <span>
+              Total labor cost:{" "}
+              <span className="text-emerald-300">
+                ${totalWages.toFixed(2)}
+              </span>
+            </span>
+          </p>
         </div>
       </div>
 
-      {/* BOTTOM ROW: TOP EMPLOYEES + ADHOC NOTE */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-slate-900/80 p-5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-50">
-              Top employees (this month)
-            </h2>
-            <p className="text-xs text-slate-400">
-              Ranked by total hours on all job sites.
-            </p>
-          </div>
-
-          <div className="mt-4 space-y-2">
-            {topEmployees.length === 0 && (
-              <p className="text-xs text-slate-500">No shifts this month.</p>
-            )}
-
-            {topEmployees.map((emp, index) => (
-              <div
-                key={emp.name + (emp.code ?? "")}
-                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-xs font-semibold text-slate-100">
-                    {index + 1}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-slate-50">
-                      {emp.name}
-                    </div>
-                    <div className="text-[11px] uppercase tracking-wide text-slate-400">
-                      {emp.code ?? "No code"}
-                    </div>
-                  </div>
-                </div>
-                <div className="text-sm font-semibold text-slate-100">
-                  {emp.hours.toFixed(2)}h
-                </div>
-              </div>
-            ))}
-          </div>
+      {/* Table */}
+      <div className="card bg-slate-900/80 border border-slate-700/80">
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-slate-100">
+            Job-site hours & labor cost
+          </h2>
+          <p className="text-[11px] text-slate-400">
+            Based on all completed shifts within the selected dates.
+          </p>
         </div>
 
-        <div className="rounded-xl border border-amber-500/40 bg-amber-950/600/10 p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-amber-100">
-            ADHOC trend (this month)
-          </h2>
-          <p className="mt-1 text-xs text-amber-200">
-            Weekly count of ADHOC shifts (zero-radius locations). Use this to
-            spot off-site / non-GPS usage patterns.
-          </p>
-          <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-950/600/10 px-3 py-2 text-xs text-amber-100">
-            <div className="flex items-center justify-between">
-              <span>This month</span>
-              <span className="font-semibold">{adhocShiftCount} ADHOC</span>
-            </div>
-          </div>
+        <div className="mt-2 overflow-x-auto">
+          <table className="admin-table min-w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-800/80">
+                <th className="px-3 py-2 text-left">Location</th>
+                <th className="px-3 py-2 text-right">Workers</th>
+                <th className="px-3 py-2 text-right">Shifts</th>
+                <th className="px-3 py-2 text-right">Total hours</th>
+                <th className="px-3 py-2 text-right">Labor cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && !loading && (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="px-3 py-6 text-center text-slate-400"
+                  >
+                    No data for this period.
+                  </td>
+                </tr>
+              )}
+
+              {rows.map((row) => (
+                <tr key={row.locationId ?? row.locationName ?? "adhoc"}>
+                  <td className="px-3 py-2 align-middle text-slate-50">
+                    {row.locationName ?? "ADHOC job site"}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-slate-100">
+                    {row.workerCount}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-slate-100">
+                    {row.shiftCount}
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-amber-300">
+                    {row.totalHours.toFixed(2)}h
+                  </td>
+                  <td className="px-3 py-2 align-middle text-right text-emerald-300">
+                    ${row.totalWages.toFixed(2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

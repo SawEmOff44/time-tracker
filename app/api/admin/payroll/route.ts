@@ -1,122 +1,78 @@
-// app/api/admin/payroll/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// ----- Date helpers: Monday–Saturday pay periods ---------------------------
-
-// Parse "YYYY-MM-DD" as a local date (midnight)
-function parseISOToLocalDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
-  return new Date(y, m - 1, d);
-}
-
-// Turn a Date (local) into "YYYY-MM-DD"
-function toISODateLocal(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-// Return Monday–Saturday period that contains "today"
-function getCurrentPayPeriod(today = new Date()) {
-  const day = today.getDay(); // 0=Sun,1=Mon,...,6=Sat
-
-  // We want Monday as start.
-  // Example: Mon(1)->0, Tue(2)->1, ..., Sun(0)->6 (days since Monday)
-  const daysSinceMonday = (day - 1 + 7) % 7;
-
-  const start = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate() - daysSinceMonday
-  );
-  const end = new Date(start);
-  end.setDate(end.getDate() + 5); // Monday + 5 => Saturday
-
-  return {
-    startDateStr: toISODateLocal(start),
-    endDateStr: toISODateLocal(end),
-  };
-}
-
-// Given a local date, get the following Friday (payday)
-function getFollowingFriday(date: Date): Date {
-  const day = date.getDay(); // 0=Sun,...,5=Fri,6=Sat
-  const daysUntilFriday = (5 - day + 7) % 7;
-  const friday = new Date(date);
-  friday.setDate(friday.getDate() + daysUntilFriday);
-  return friday;
-}
-
-// Format Date as YYYY-MM-DD purely for internal clarity
-function formatDateOnly(date: Date): string {
-  return toISODateLocal(date);
-}
-
-// ----- Types for response --------------------------------------------------
-
-type PayrollSummaryRow = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
-  totalHours: number;
-  shiftCount: number;
-};
-
-type PayrollBreakdownRow = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
+type PayrollLocationBreakdown = {
   locationId: string | null;
   locationName: string | null;
-  workDate: string; // YYYY-MM-DD
-  hours: number;
+  totalHours: number;
+  totalWages: number;
 };
 
-type PayrollResponseBody = {
-  summary: PayrollSummaryRow[];
-  breakdown: PayrollBreakdownRow[];
-  meta: {
-    startDate: string; // YYYY-MM-DD (Monday)
-    endDate: string; // YYYY-MM-DD (Saturday)
-    payday: string; // YYYY-MM-DD (following Friday)
-  };
+type PayrollDayBreakdown = {
+  date: string; // YYYY-MM-DD
+  weekday: string; // Mon, Tue, ...
+  totalHours: number;
+  totalWages: number;
+  perLocation: PayrollLocationBreakdown[];
 };
+
+type PayrollRow = {
+  userId: string;
+  name: string;
+  employeeCode: string | null;
+  hourlyRate: number | null;
+  totalHours: number;
+  totalWages: number;
+  shiftCount: number;
+  perLocation: PayrollLocationBreakdown[];
+  perDay: PayrollDayBreakdown[];
+};
+
+function parseDateParam(value: string | null): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function yyyymmdd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function weekdayShort(d: Date): string {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+}
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
+    const startStr = searchParams.get("start");
+    const endStr = searchParams.get("end");
+    const userIdFilter = searchParams.get("userId"); // optional (for worker portal later)
 
-    let startStr = searchParams.get("start");
-    let endStr = searchParams.get("end");
+    const start = parseDateParam(startStr);
+    const end = parseDateParam(endStr);
 
-    // If dates are not provided, default to current Mon–Sat period.
-    if (!startStr || !endStr) {
-      const { startDateStr, endDateStr } = getCurrentPayPeriod();
-      startStr = startDateStr;
-      endStr = endDateStr;
+    if (!start || !end) {
+      return NextResponse.json(
+        { error: "start and end query params are required (YYYY-MM-DD)" },
+        { status: 400 }
+      );
     }
 
-    const startDate = parseISOToLocalDate(startStr);
-    const endDate = parseISOToLocalDate(endStr);
-
-    // We treat the range as inclusive [start, end], so endExclusive = end + 1 day
-    const endExclusive = new Date(endDate);
+    // Make end exclusive by adding 1 day
+    const endExclusive = new Date(end);
     endExclusive.setDate(endExclusive.getDate() + 1);
 
-    const payday = getFollowingFriday(endDate);
-
-    // 1) Pull all shifts in this date range with a clockOut
     const shifts = await prisma.shift.findMany({
       where: {
         clockIn: {
-          gte: startDate,
+          gte: start,
           lt: endExclusive,
         },
-        clockOut: {
-          not: null,
-        },
+        ...(userIdFilter ? { userId: userIdFilter } : {}),
         user: {
           active: true,
         },
@@ -125,114 +81,131 @@ export async function GET(req: NextRequest) {
         user: true,
         location: true,
       },
+      orderBy: {
+        clockIn: "asc",
+      },
     });
 
-    // 2) Aggregate in JS:
-    //    - summaryByUser: total hours & count
-    //    - breakdown: per user + location + day (based on clockIn date)
-
-    const summaryMap = new Map<string, PayrollSummaryRow>();
-    const breakdownMap = new Map<string, PayrollBreakdownRow>();
+    const userMap = new Map<string, PayrollRow>();
 
     for (const shift of shifts) {
-      if (!shift.clockIn || !shift.clockOut) continue;
-
-      const clockIn = new Date(shift.clockIn);
-      const clockOut = new Date(shift.clockOut);
-      const diffMs = clockOut.getTime() - clockIn.getTime();
-      if (!Number.isFinite(diffMs) || diffMs <= 0) continue;
-
-      const hours = diffMs / (1000 * 60 * 60);
+      if (!shift.clockOut) continue; // ignore open shifts
 
       const user = shift.user;
+      if (!user) continue;
+
       const location = shift.location;
+      const hours =
+        (shift.clockOut.getTime() - shift.clockIn.getTime()) / (1000 * 60 * 60);
+      if (hours <= 0) continue;
 
-      const userId = user.id;
-      const name = user.name;
-      const employeeCode = user.employeeCode ?? null;
+      const hourlyRate = user.hourlyRate ?? 0;
+      const wages = hourlyRate * hours;
 
-      const locationId = location?.id ?? null;
-      const locationName = location?.name ?? null;
-
-      // Work date = local date from clockIn
-      const workDate = formatDateOnly(clockIn); // YYYY-MM-DD
-
-      // Summary by user
-      const existingSummary = summaryMap.get(userId);
-      if (!existingSummary) {
-        summaryMap.set(userId, {
-          userId,
-          name,
-          employeeCode,
-          totalHours: hours,
-          shiftCount: 1,
-        });
-      } else {
-        existingSummary.totalHours += hours;
-        existingSummary.shiftCount += 1;
+      let row = userMap.get(user.id);
+      if (!row) {
+        row = {
+          userId: user.id,
+          name: user.name,
+          employeeCode: user.employeeCode ?? null,
+          hourlyRate: user.hourlyRate ?? null,
+          totalHours: 0,
+          totalWages: 0,
+          shiftCount: 0,
+          perLocation: [],
+          perDay: [],
+        };
+        userMap.set(user.id, row);
       }
 
-      // Breakdown key: user + location + day
-      const breakdownKey = `${userId}|${locationId ?? "NULL"}|${workDate}`;
-      const existingBreakdown = breakdownMap.get(breakdownKey);
-      if (!existingBreakdown) {
-        breakdownMap.set(breakdownKey, {
-          userId,
-          name,
-          employeeCode,
-          locationId,
-          locationName,
-          workDate,
-          hours,
-        });
-      } else {
-        existingBreakdown.hours += hours;
+      row.totalHours += hours;
+      row.totalWages += wages;
+      row.shiftCount += 1;
+
+      // ---- per-location aggregation ----
+      const locId = location?.id ?? null;
+      const locName = location?.name ?? (location ? "Unnamed job site" : "ADHOC");
+
+      let locRow = row.perLocation.find((l) => l.locationId === locId);
+      if (!locRow) {
+        locRow = {
+          locationId: locId,
+          locationName: locName,
+          totalHours: 0,
+          totalWages: 0,
+        };
+        row.perLocation.push(locRow);
       }
+      locRow.totalHours += hours;
+      locRow.totalWages += wages;
+
+      // ---- per-day + per-location-inside-day ----
+      const dayKey = yyyymmdd(shift.clockIn);
+      const dayWeekday = weekdayShort(shift.clockIn);
+
+      let dayRow = row.perDay.find((d) => d.date === dayKey);
+      if (!dayRow) {
+        dayRow = {
+          date: dayKey,
+          weekday: dayWeekday,
+          totalHours: 0,
+          totalWages: 0,
+          perLocation: [],
+        };
+        row.perDay.push(dayRow);
+      }
+
+      dayRow.totalHours += hours;
+      dayRow.totalWages += wages;
+
+      let dayLocRow = dayRow.perLocation.find(
+        (l) => l.locationId === locId
+      );
+      if (!dayLocRow) {
+        dayLocRow = {
+          locationId: locId,
+          locationName: locName,
+          totalHours: 0,
+          totalWages: 0,
+        };
+        dayRow.perLocation.push(dayLocRow);
+      }
+      dayLocRow.totalHours += hours;
+      dayLocRow.totalWages += wages;
     }
 
-    const summary: PayrollSummaryRow[] = Array.from(summaryMap.values()).map(
-      (row) => ({
-        ...row,
-        totalHours: Number(row.totalHours.toFixed(2)),
-      })
-    );
-
-    const breakdown: PayrollBreakdownRow[] = Array.from(
-      breakdownMap.values()
-    ).map((row) => ({
+    const rows: PayrollRow[] = Array.from(userMap.values()).map((row) => ({
       ...row,
-      hours: Number(row.hours.toFixed(2)),
+      totalHours: Number(row.totalHours.toFixed(2)),
+      totalWages: Number(row.totalWages.toFixed(2)),
+      perLocation: row.perLocation
+        .map((l) => ({
+          ...l,
+          totalHours: Number(l.totalHours.toFixed(2)),
+          totalWages: Number(l.totalWages.toFixed(2)),
+        }))
+        .sort((a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)),
+      perDay: row.perDay
+        .map((d) => ({
+          ...d,
+          totalHours: Number(d.totalHours.toFixed(2)),
+          totalWages: Number(d.totalWages.toFixed(2)),
+          perLocation: d.perLocation
+            .map((l) => ({
+              ...l,
+              totalHours: Number(l.totalHours.toFixed(2)),
+              totalWages: Number(l.totalWages.toFixed(2)),
+            }))
+            .sort((a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)),
+        }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
     }));
 
-    // Sort: summary by name, breakdown by name -> location -> date
-    summary.sort((a, b) => a.name.localeCompare(b.name));
-    breakdown.sort((a, b) => {
-      const byName = a.name.localeCompare(b.name);
-      if (byName !== 0) return byName;
-
-      const locA = a.locationName ?? "";
-      const locB = b.locationName ?? "";
-      const byLoc = locA.localeCompare(locB);
-      if (byLoc !== 0) return byLoc;
-
-      return a.workDate.localeCompare(b.workDate);
-    });
-
-    const body: PayrollResponseBody = {
-      summary,
-      breakdown,
-      meta: {
-        startDate: formatDateOnly(startDate),
-        endDate: formatDateOnly(endDate),
-        payday: formatDateOnly(payday),
-      },
-    };
-
-    return NextResponse.json(body);
+    return NextResponse.json(rows);
   } catch (err) {
-    console.error("Error in payroll API:", err);
+    console.error("Payroll GET error", err);
     return NextResponse.json(
-      { error: "Failed to compute payroll for the given period." },
+      { error: "Failed to load payroll data" },
       { status: 500 }
     );
   }
