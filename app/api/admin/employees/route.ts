@@ -9,6 +9,8 @@ type AdminUserPayload = {
   employeeCode: string | null;
   active: boolean;
   createdAt: string;
+  hourlyRate: number | null;
+  salaryAnnnual: number | null;
 };
 
 export async function GET(_req: NextRequest) {
@@ -33,6 +35,8 @@ export async function GET(_req: NextRequest) {
       employeeCode: u.employeeCode,
       active: u.active,
       createdAt: u.createdAt.toISOString(),
+      hourlyRate: u.hourlyRate,
+      salaryAnnnual: u.salaryAnnnual,
     }));
 
     return NextResponse.json(payload, { status: 200 });
@@ -99,6 +103,8 @@ export async function POST(req: NextRequest) {
       employeeCode: created.employeeCode,
       active: created.active,
       createdAt: created.createdAt.toISOString(),
+      hourlyRate: created.hourlyRate ?? null,
+      salaryAnnnual: created.salaryAnnnual ?? null,
     };
 
     return NextResponse.json(payload, { status: 201 });

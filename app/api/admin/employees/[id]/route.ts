@@ -30,6 +30,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
       employeeCode: user.employeeCode,
       active: user.active,
       createdAt: user.createdAt.toISOString(),
+      hourlyRate: user.hourlyRate,
+      salaryAnnnual: user.salaryAnnnual,
       // Note: we never return pinHash or PIN
     });
   } catch (err) {
@@ -52,6 +54,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       employeeCode?: string | null;
       active?: boolean;
       pin?: string; // ✅ optional PIN provided by admin
+      hourlyRate?: number | null;
+      salaryAnnnual?: number | null;
     };
 
     const data: {
@@ -60,6 +64,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       employeeCode?: string | null;
       active?: boolean;
       pinHash?: string | null;
+      hourlyRate?: number | null;
+      salaryAnnnual?: number | null;
     } = {};
 
     if (typeof body.name === "string") data.name = body.name.trim();
@@ -79,6 +85,13 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 
     if (typeof body.active === "boolean") {
       data.active = body.active;
+    }
+
+    if (typeof body.hourlyRate === "number" || body.hourlyRate === null) {
+      data.hourlyRate = body.hourlyRate;
+    }
+    if (typeof body.salaryAnnnual === "number" || body.salaryAnnnual === null) {
+      data.salaryAnnnual = body.salaryAnnnual;
     }
 
     // ✅ Handle PIN reset if provided
@@ -116,6 +129,8 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       employeeCode: updated.employeeCode,
       active: updated.active,
       createdAt: updated.createdAt.toISOString(),
+      hourlyRate: updated.hourlyRate,
+      salaryAnnnual: updated.salaryAnnnual,
     });
   } catch (err: any) {
     console.error("Error updating employee", err);
