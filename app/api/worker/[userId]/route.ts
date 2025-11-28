@@ -2,12 +2,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-type RouteParams = {
-  params: { userId: string };
-};
+type RouteParams = { params: { userId: string } };
+
+function resolveUserWhere(handle: string) {
+  // If it looks like a Prisma id, use `id`, otherwise treat as employeeCode
+  if (handle.startsWith("cm") && handle.length > 20) {
+    return { id: handle };
+  }
+  return { employeeCode: handle };
+}
+
+/* ------------------------ GET: worker + shifts ------------------------ */
 
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const handle = params.userId; // e.g. "KYLE" or a Prisma id
+  const handle = params.userId;
 
   if (!handle) {
     return NextResponse.json(
@@ -17,9 +25,6 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    // Decide how to look this worker up:
-    // - If it looks like a Prisma id (starts with "cm" and long), use `id`
-    // - Otherwise treat it as an employeeCode like "KYLE"
     const include = {
       shifts: {
         orderBy: { clockIn: "desc" },
@@ -28,16 +33,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
       },
     } as const;
 
-    let user =
-      handle.startsWith("cm") && handle.length > 20
-        ? await prisma.user.findUnique({
-            where: { id: handle },
-            include,
-          })
-        : await prisma.user.findUnique({
-            where: { employeeCode: handle },
-            include,
-          });
+    const user = await prisma.user.findUnique({
+      where: resolveUserWhere(handle),
+      include,
+    });
 
     if (!user) {
       return NextResponse.json(
@@ -71,7 +70,6 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
         id: user.id,
         name: user.name,
         employeeCode: user.employeeCode,
-        // contact fields for later UI
         email: user.email,
         phone: user.phone,
         addressLine1: user.addressLine1,
@@ -86,6 +84,103 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     console.error("Error loading worker data", err);
     return NextResponse.json(
       { error: "Failed to load worker data" },
+      { status: 500 }
+    );
+  }
+}
+
+/* ------------------------ PATCH: update profile ------------------------ */
+
+export async function PATCH(req: NextRequest, { params }: RouteParams) {
+  const handle = params.userId;
+
+  if (!handle) {
+    return NextResponse.json(
+      { error: "Missing worker identifier." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const body = (await req.json()) as {
+      name?: string;
+      email?: string | null;
+      phone?: string | null;
+      addressLine1?: string | null;
+      addressLine2?: string | null;
+      city?: string | null;
+      state?: string | null;
+      postalcode?: string | null;
+    };
+
+    const data: typeof body = {};
+
+    if (typeof body.name === "string") data.name = body.name.trim();
+    if (typeof body.email === "string" || body.email === null) {
+      data.email = body.email ? body.email.trim() : null;
+    }
+    if (typeof body.phone === "string" || body.phone === null) {
+      data.phone = body.phone ? body.phone.trim() : null;
+    }
+    if (
+      typeof body.addressLine1 === "string" ||
+      body.addressLine1 === null
+    ) {
+      data.addressLine1 = body.addressLine1
+        ? body.addressLine1.trim()
+        : null;
+    }
+    if (
+      typeof body.addressLine2 === "string" ||
+      body.addressLine2 === null
+    ) {
+      data.addressLine2 = body.addressLine2
+        ? body.addressLine2.trim()
+        : null;
+    }
+    if (typeof body.city === "string" || body.city === null) {
+      data.city = body.city ? body.city.trim() : null;
+    }
+    if (typeof body.state === "string" || body.state === null) {
+      data.state = body.state ? body.state.trim() : null;
+    }
+    if (
+      typeof body.postalcode === "string" ||
+      body.postalcode === null
+    ) {
+      data.postalcode = body.postalcode
+        ? body.postalcode.trim()
+        : null;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json(
+        { error: "No valid fields to update." },
+        { status: 400 }
+      );
+    }
+
+    const updated = await prisma.user.update({
+      where: resolveUserWhere(handle),
+      data,
+    });
+
+    return NextResponse.json({
+      id: updated.id,
+      name: updated.name,
+      employeeCode: updated.employeeCode,
+      email: updated.email,
+      phone: updated.phone,
+      addressLine1: updated.addressLine1,
+      addressLine2: updated.addressLine2,
+      city: updated.city,
+      state: updated.state,
+      postalcode: updated.postalcode,
+    });
+  } catch (err) {
+    console.error("Error updating worker profile", err);
+    return NextResponse.json(
+      { error: "Failed to update worker profile." },
       { status: 500 }
     );
   }

@@ -38,6 +38,7 @@ model User {
   shiftCorrectionRequests ShiftCorrectionRequest[]
 
   hourlyRate   Float?  @default(0)
+  salaryAnnnual Float?
 
   createdAt DateTime @default(now())
 }
