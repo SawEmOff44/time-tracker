@@ -43,6 +43,19 @@ model User {
   createdAt DateTime @default(now())
 }
 
+model EmployeeDocument {
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+
+  title           String
+  url             String           // can be Google Drive, Dropbox, etc.
+  description     String?
+  visibleToWorker Boolean  @default(true)
+
+  createdAt       DateTime @default(now())
+}
+
 model Location {
   id           String  @id @default(cuid())
   name         String
@@ -115,17 +128,4 @@ model ShiftCorrectionRequest {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-model EmployeeDocument {
-  id              String   @id @default(cuid())
-  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId          String
-
-  name            String              // e.g. "W-4 2025" or "Forklift cert"
-  fileUrl         String              // URL to the file (S3, Drive, etc.)
-  visibleToWorker Boolean  @default(true)
-  uploadedByAdmin Boolean  @default(false)
-
-  createdAt       DateTime @default(now())
 }

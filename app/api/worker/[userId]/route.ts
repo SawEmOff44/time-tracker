@@ -1,41 +1,53 @@
-// app/api/worker/[userId]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-type RouteParams = { params: { userId: string } };
+type RouteContext = {
+  params: {
+    userId: string; // this is employeeCode from the URL
+  };
+};
 
-function resolveUserWhere(handle: string) {
-  // If it looks like a Prisma id, use `id`, otherwise treat as employeeCode
-  if (handle.startsWith("cm") && handle.length > 20) {
-    return { id: handle };
-  }
-  return { employeeCode: handle };
+// Helper: compute hours between clockIn/clockOut
+function computeHours(clockIn: Date, clockOut: Date | null): number {
+  if (!clockOut) return 0;
+  const diffMs = clockOut.getTime() - clockIn.getTime();
+  if (diffMs <= 0) return 0;
+  return diffMs / (1000 * 60 * 60);
 }
 
-/* ------------------------ GET: worker + shifts ------------------------ */
+// GET /api/worker/[userId]  -> worker payload used by WorkerProfilePage
+export async function GET(_req: NextRequest, context: RouteContext) {
+  const employeeCode = decodeURIComponent(context.params.userId);
 
-export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const handle = params.userId;
-
-  if (!handle) {
+  if (!employeeCode) {
     return NextResponse.json(
-      { error: "Missing worker identifier." },
+      { error: "Missing employee code in URL." },
       { status: 400 }
     );
   }
 
   try {
-    const include = {
-      shifts: {
-        orderBy: { clockIn: "desc" },
-        take: 50,
-        include: { location: true },
-      },
-    } as const;
-
     const user = await prisma.user.findUnique({
-      where: resolveUserWhere(handle),
-      include,
+      where: { employeeCode }, // employeeCode is unique in your schema
+      include: {
+        // Most recent 50 shifts
+        shifts: {
+          orderBy: { clockIn: "desc" },
+          take: 50,
+          include: {
+            location: true,
+          },
+        },
+        // Documents relation already exists on User (from your Prisma types)
+        documents: {
+          where: {
+            visibleToWorker: true,
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+        },
+      },
     });
 
     if (!user) {
@@ -45,27 +57,31 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
       );
     }
 
-    const shifts = user.shifts.map((s) => {
-      const clockIn = s.clockIn;
-      const clockOut = s.clockOut;
-      const effectiveOut = clockOut ?? new Date();
-      const diffMs = effectiveOut.getTime() - clockIn.getTime();
-      const hours = diffMs > 0 ? diffMs / (1000 * 60 * 60) : 0;
+    const shifts = user.shifts.map((s) => ({
+      id: s.id,
+      clockIn: s.clockIn.toISOString(),
+      clockOut: s.clockOut ? s.clockOut.toISOString() : null,
+      locationName: s.location?.name ?? s.locationId ?? "Unknown",
+      // If you have an `adhoc` field on Shift, use it. Otherwise treat
+      // "no location" as adhoc.
+      adhoc: (s as any).adhoc ?? !s.locationId,
+      hours:
+        (s as any).hours != null
+          ? Number((s as any).hours)
+          : computeHours(s.clockIn, s.clockOut),
+      notes: (s as any).notes ?? null,
+    }));
 
-      return {
-        id: s.id,
-        clockIn: clockIn.toISOString(),
-        clockOut: clockOut ? clockOut.toISOString() : null,
-        locationName:
-          s.location?.name ??
-          (s.locationId ? "Job site" : "ADHOC job site"),
-        adhoc: !s.locationId,
-        hours,
-        notes: s.notes,
-      };
-    });
+    const documents =
+      user.documents?.map((d) => ({
+        id: d.id,
+        title: d.title,
+        url: d.url,
+        description: d.description,
+        createdAt: d.createdAt.toISOString(),
+      })) ?? [];
 
-    return NextResponse.json({
+    const payload = {
       worker: {
         id: user.id,
         name: user.name,
@@ -79,92 +95,76 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
         postalcode: user.postalcode,
       },
       shifts,
-    });
+      documents,
+    };
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error loading worker data", err);
     return NextResponse.json(
-      { error: "Failed to load worker data" },
+      { error: "Error loading worker data." },
       { status: 500 }
     );
   }
 }
 
-/* ------------------------ PATCH: update profile ------------------------ */
+// PATCH /api/worker/[userId]  -> update contact info (from worker portal)
+export async function PATCH(req: NextRequest, context: RouteContext) {
+  const employeeCode = decodeURIComponent(context.params.userId);
 
-export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const handle = params.userId;
-
-  if (!handle) {
+  if (!employeeCode) {
     return NextResponse.json(
-      { error: "Missing worker identifier." },
+      { error: "Missing employee code in URL." },
+      { status: 400 }
+    );
+  }
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body." },
+      { status: 400 }
+    );
+  }
+
+  const {
+    name,
+    email,
+    phone,
+    addressLine1,
+    addressLine2,
+    city,
+    state,
+    postalcode,
+  } = body ?? {};
+
+  // Build update object, allowing nulls to clear values, but ignoring undefined
+  const data: Record<string, any> = {};
+  if (name !== undefined) data.name = name;
+  if (email !== undefined) data.email = email;
+  if (phone !== undefined) data.phone = phone;
+  if (addressLine1 !== undefined) data.addressLine1 = addressLine1;
+  if (addressLine2 !== undefined) data.addressLine2 = addressLine2;
+  if (city !== undefined) data.city = city;
+  if (state !== undefined) data.state = state;
+  if (postalcode !== undefined) data.postalcode = postalcode;
+
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json(
+      { error: "No updatable fields provided." },
       { status: 400 }
     );
   }
 
   try {
-    const body = (await req.json()) as {
-      name?: string;
-      email?: string | null;
-      phone?: string | null;
-      addressLine1?: string | null;
-      addressLine2?: string | null;
-      city?: string | null;
-      state?: string | null;
-      postalcode?: string | null;
-    };
-
-    const data: typeof body = {};
-
-    if (typeof body.name === "string") data.name = body.name.trim();
-    if (typeof body.email === "string" || body.email === null) {
-      data.email = body.email ? body.email.trim() : null;
-    }
-    if (typeof body.phone === "string" || body.phone === null) {
-      data.phone = body.phone ? body.phone.trim() : null;
-    }
-    if (
-      typeof body.addressLine1 === "string" ||
-      body.addressLine1 === null
-    ) {
-      data.addressLine1 = body.addressLine1
-        ? body.addressLine1.trim()
-        : null;
-    }
-    if (
-      typeof body.addressLine2 === "string" ||
-      body.addressLine2 === null
-    ) {
-      data.addressLine2 = body.addressLine2
-        ? body.addressLine2.trim()
-        : null;
-    }
-    if (typeof body.city === "string" || body.city === null) {
-      data.city = body.city ? body.city.trim() : null;
-    }
-    if (typeof body.state === "string" || body.state === null) {
-      data.state = body.state ? body.state.trim() : null;
-    }
-    if (
-      typeof body.postalcode === "string" ||
-      body.postalcode === null
-    ) {
-      data.postalcode = body.postalcode
-        ? body.postalcode.trim()
-        : null;
-    }
-
-    if (Object.keys(data).length === 0) {
-      return NextResponse.json(
-        { error: "No valid fields to update." },
-        { status: 400 }
-      );
-    }
-
     const updated = await prisma.user.update({
-      where: resolveUserWhere(handle),
+      where: { employeeCode },
       data,
     });
 
+    // Return the shape WorkerProfilePage expects in saveContactInfo()
     return NextResponse.json({
       id: updated.id,
       name: updated.name,
@@ -178,9 +178,9 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       postalcode: updated.postalcode,
     });
   } catch (err) {
-    console.error("Error updating worker profile", err);
+    console.error("Error updating worker contact info", err);
     return NextResponse.json(
-      { error: "Failed to update worker profile." },
+      { error: "Failed to save contact information." },
       { status: 500 }
     );
   }

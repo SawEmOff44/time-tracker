@@ -1,4 +1,3 @@
-// app/worker/[userId]/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -12,6 +11,15 @@ type ShiftRow = {
   adhoc: boolean;
   hours: number;
   notes: string | null;
+};
+
+// Documents visible to the worker
+type WorkerDocument = {
+  id: string;
+  title: string;
+  url: string;
+  description: string | null;
+  createdAt: string; // ISO string
 };
 
 type WorkerPayload = {
@@ -28,13 +36,33 @@ type WorkerPayload = {
     postalcode: string | null;
   };
   shifts: ShiftRow[];
+  documents?: WorkerDocument[]; // visibleToWorker=true
 };
 
-type CorrectionType =
-  | "MISSING_IN"
-  | "MISSING_OUT"
-  | "ADJUST_IN"
-  | "ADJUST_OUT";
+type CorrectionType = "MISSING_IN" | "MISSING_OUT" | "ADJUST_IN" | "ADJUST_OUT";
+
+function getCurrentPayPeriod(today = new Date()) {
+  // Mon–Sat pay period in local time
+  const d = new Date(today);
+  const day = d.getDay(); // 0 Sun, 1 Mon, ...
+  const diffToMonday = (day + 6) % 7; // Mon->0
+  const start = new Date(d);
+  start.setDate(d.getDate() - diffToMonday);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(start.getDate() + 5);
+  end.setHours(23, 59, 59, 999);
+
+  return { start, end };
+}
+
+function fmtDateInput(date: Date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
@@ -62,6 +90,7 @@ function toLocalDateTimeInputValue(iso: string | null): string {
 }
 
 export default function WorkerProfilePage() {
+  // In your routing, [userId] is actually the employeeCode in the URL, e.g. /worker/KYLE
   const params = useParams<{ userId: string }>();
   const employeeCodeFromUrl = params.userId;
 
@@ -69,33 +98,41 @@ export default function WorkerProfilePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // profile form state
-  const [profileName, setProfileName] = useState("");
-  const [profileEmail, setProfileEmail] = useState("");
-  const [profilePhone, setProfilePhone] = useState("");
-  const [profileAddress1, setProfileAddress1] = useState("");
-  const [profileAddress2, setProfileAddress2] = useState("");
-  const [profileCity, setProfileCity] = useState("");
-  const [profileState, setProfileState] = useState("");
-  const [profilePostal, setProfilePostal] = useState("");
-  const [profileSaving, setProfileSaving] = useState(false);
-  const [profileMessage, setProfileMessage] = useState<string | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
+  // --- contact info form state ---
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactAddress1, setContactAddress1] = useState("");
+  const [contactAddress2, setContactAddress2] = useState("");
+  const [contactCity, setContactCity] = useState("");
+  const [contactState, setContactState] = useState("");
+  const [contactPostal, setContactPostal] = useState("");
+  const [savingContact, setSavingContact] = useState(false);
+  const [contactMessage, setContactMessage] = useState<string | null>(null);
+  const [contactError, setContactError] = useState<string | null>(null);
 
-  // correction form state
+  // --- date filter (pay period style) ---
+  const initialPeriod = getCurrentPayPeriod();
+  const [filterStart, setFilterStart] = useState<string>(
+    fmtDateInput(initialPeriod.start)
+  );
+  const [filterEnd, setFilterEnd] = useState<string>(
+    fmtDateInput(initialPeriod.end)
+  );
+
+  // --- correction form state ---
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [correctionType, setCorrectionType] =
     useState<CorrectionType>("ADJUST_IN");
-  const [requestedClockIn, setRequestedClockIn] = useState<string>("");
-  const [requestedClockOut, setRequestedClockOut] = useState<string>("");
+  const [requestedClockIn, setRequestedClockIn] = useState<string>(""); // datetime-local
+  const [requestedClockOut, setRequestedClockOut] = useState<string>(""); // datetime-local
   const [reason, setReason] = useState<string>("");
   const [submittingCorrection, setSubmittingCorrection] = useState(false);
-  const [correctionMessage, setCorrectionMessage] = useState<string | null>(
-    null
-  );
+  const [correctionMessage, setCorrectionMessage] =
+    useState<string | null>(null);
   const [correctionError, setCorrectionError] = useState<string | null>(null);
 
-  // Load worker + shifts
+  // Load worker + shifts + docs
   useEffect(() => {
     if (!employeeCodeFromUrl) return;
 
@@ -118,16 +155,15 @@ export default function WorkerProfilePage() {
         const payload = (await res.json()) as WorkerPayload;
         setData(payload);
 
-        // hydrate profile form
         const w = payload.worker;
-        setProfileName(w.name ?? "");
-        setProfileEmail(w.email ?? "");
-        setProfilePhone(w.phone ?? "");
-        setProfileAddress1(w.addressLine1 ?? "");
-        setProfileAddress2(w.addressLine2 ?? "");
-        setProfileCity(w.city ?? "");
-        setProfileState(w.state ?? "");
-        setProfilePostal(w.postalcode ?? "");
+        setContactName(w.name ?? "");
+        setContactEmail(w.email ?? "");
+        setContactPhone(w.phone ?? "");
+        setContactAddress1(w.addressLine1 ?? "");
+        setContactAddress2(w.addressLine2 ?? "");
+        setContactCity(w.city ?? "");
+        setContactState(w.state ?? "");
+        setContactPostal(w.postalcode ?? "");
       } catch (err: any) {
         console.error(err);
         setError(err.message ?? "Could not load worker data.");
@@ -141,16 +177,37 @@ export default function WorkerProfilePage() {
   }, [employeeCodeFromUrl]);
 
   const workerName = data?.worker.name ?? employeeCodeFromUrl ?? "Worker";
-  const employeeCode = data?.worker.employeeCode ?? employeeCodeFromUrl ?? "—";
-  const workerId = data?.worker.id ?? "";
+  const employeeCode =
+    data?.worker.employeeCode ?? employeeCodeFromUrl ?? "—";
+  const workerId = data?.worker.id ?? ""; // real user.id from DB
 
-  const totalHours = data
-    ? data.shifts.reduce((sum, s) => sum + (s.hours || 0), 0)
-    : 0;
+  // Parse filter dates for in-memory filtering
+  let filterStartDate: Date | null = null;
+  let filterEndDate: Date | null = null;
+  if (filterStart.trim()) {
+    filterStartDate = new Date(filterStart + "T00:00:00");
+  }
+  if (filterEnd.trim()) {
+    filterEndDate = new Date(filterEnd + "T23:59:59");
+  }
+
+  const allShifts = data?.shifts ?? [];
+  const filteredShifts = allShifts.filter((s) => {
+    if (!filterStartDate && !filterEndDate) return true;
+    const d = new Date(s.clockIn);
+    if (filterStartDate && d < filterStartDate) return false;
+    if (filterEndDate && d > filterEndDate) return false;
+    return true;
+  });
+
+  const totalHours = filteredShifts.reduce(
+    (sum, s) => sum + (s.hours || 0),
+    0
+  );
 
   const selectedShift =
     selectedShiftId && data
-      ? data.shifts.find((s) => s.id === selectedShiftId) ?? null
+      ? filteredShifts.find((s) => s.id === selectedShiftId) ?? null
       : null;
 
   function openCorrectionForm(shift: ShiftRow) {
@@ -170,48 +227,6 @@ export default function WorkerProfilePage() {
     setRequestedClockIn("");
     setRequestedClockOut("");
     setReason("");
-  }
-
-  async function saveProfile() {
-    if (!employeeCodeFromUrl) return;
-
-    setProfileSaving(true);
-    setProfileMessage(null);
-    setProfileError(null);
-
-    try {
-      const res = await fetch(
-        `/api/worker/${encodeURIComponent(employeeCodeFromUrl)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: profileName.trim(),
-            email: profileEmail.trim() || null,
-            phone: profilePhone.trim() || null,
-            addressLine1: profileAddress1.trim() || null,
-            addressLine2: profileAddress2.trim() || null,
-            city: profileCity.trim() || null,
-            state: profileState.trim() || null,
-            postalcode: profilePostal.trim() || null,
-          }),
-        }
-      );
-
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        throw new Error(body?.error ?? "Failed to save profile.");
-      }
-
-      setProfileMessage("Profile saved.");
-    } catch (err: any) {
-      console.error(err);
-      setProfileError(err.message ?? "Unable to save profile.");
-    } finally {
-      setProfileSaving(false);
-    }
   }
 
   async function submitCorrection() {
@@ -249,7 +264,9 @@ export default function WorkerProfilePage() {
         const body = (await res.json().catch(() => null)) as
           | { error?: string }
           | null;
-        throw new Error(body?.error ?? "Failed to submit correction request.");
+        throw new Error(
+          body?.error ?? "Failed to submit correction request."
+        );
       }
 
       setCorrectionMessage(
@@ -265,6 +282,69 @@ export default function WorkerProfilePage() {
     }
   }
 
+  async function saveContactInfo() {
+    if (!employeeCodeFromUrl) return;
+
+    setSavingContact(true);
+    setContactMessage(null);
+    setContactError(null);
+
+    try {
+      const res = await fetch(
+        `/api/worker/${encodeURIComponent(employeeCodeFromUrl)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: contactName.trim() || null,
+            email: contactEmail.trim() || null,
+            phone: contactPhone.trim() || null,
+            addressLine1: contactAddress1.trim() || null,
+            addressLine2: contactAddress2.trim() || null,
+            city: contactCity.trim() || null,
+            state: contactState.trim() || null,
+            postalcode: contactPostal.trim() || null,
+          }),
+        }
+      );
+
+      const body = (await res.json().catch(() => null)) as
+        | WorkerPayload["worker"]
+        | { error?: string }
+        | null;
+
+      if (!res.ok || !body || "error" in body) {
+        const msg =
+          (body && "error" in body && body.error) ||
+          "Failed to save contact information.";
+        throw new Error(msg);
+      }
+
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              worker: {
+                ...prev.worker,
+                ...(body as WorkerPayload["worker"]),
+              },
+            }
+          : prev
+      );
+
+      setContactMessage("Contact information updated.");
+    } catch (err: any) {
+      console.error(err);
+      setContactError(
+        err.message ?? "Unable to save contact information."
+      );
+    } finally {
+      setSavingContact(false);
+    }
+  }
+
+  const visibleDocuments = data?.documents ?? [];
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 px-4 py-8">
       <div className="mx-auto w-full max-w-4xl space-y-8">
@@ -274,17 +354,18 @@ export default function WorkerProfilePage() {
             <h1 className="text-2xl font-semibold">{workerName}</h1>
             <p className="mt-1 text-sm text-slate-400">
               Employee code:{" "}
-              <span className="font-mono text-slate-100">
-                {employeeCode}
-              </span>
+              <span className="font-mono text-slate-100">{employeeCode}</span>
             </p>
           </div>
           <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3 text-right">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Total hours (listed shifts)
+              Hours in range
             </p>
             <p className="mt-1 text-xl font-semibold text-amber-300">
               {totalHours.toFixed(2)}h
+            </p>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {filterStart} → {filterEnd}
             </p>
           </div>
         </header>
@@ -296,152 +377,177 @@ export default function WorkerProfilePage() {
           </div>
         )}
 
-        {loading && (
-          <p className="text-sm text-slate-300">Loading shifts…</p>
-        )}
+        {loading && <p className="text-sm text-slate-300">Loading…</p>}
 
-        {/* Profile card */}
-        {!loading && !error && (
+        {/* Contact info card */}
+        {!loading && !error && data && (
           <section className="card bg-slate-900/80 border border-slate-700/80">
             <div className="mb-3 flex items-center justify-between gap-4">
-              <h2 className="text-sm font-semibold text-slate-100">
-                Your profile
-              </h2>
-              <p className="text-[11px] text-slate-400">
-                Keep your contact and mailing information up to date.
-              </p>
+              <div>
+                <h2 className="text-sm font-semibold text-slate-100">
+                  My contact information
+                </h2>
+                <p className="text-[11px] text-slate-400">
+                  Keep this up to date so the office can reach you.
+                </p>
+              </div>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Name
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileName}
-                  onChange={(e) => setProfileName(e.target.value)}
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Phone
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profilePhone}
-                  onChange={(e) => setProfilePhone(e.target.value)}
-                  placeholder="e.g. 555-123-4567"
+                  type="tel"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1 sm:col-span-2">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Email
                 </label>
                 <input
                   type="email"
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileEmail}
-                  onChange={(e) => setProfileEmail(e.target.value)}
-                  placeholder="you@example.com"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1 sm:col-span-2">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Address line 1
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileAddress1}
-                  onChange={(e) => setProfileAddress1(e.target.value)}
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactAddress1}
+                  onChange={(e) => setContactAddress1(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1 sm:col-span-2">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Address line 2
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileAddress2}
-                  onChange={(e) => setProfileAddress2(e.target.value)}
-                  placeholder="Apartment, suite, etc. (optional)"
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactAddress2}
+                  onChange={(e) => setContactAddress2(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   City
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileCity}
-                  onChange={(e) => setProfileCity(e.target.value)}
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactCity}
+                  onChange={(e) => setContactCity(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   State
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profileState}
-                  onChange={(e) => setProfileState(e.target.value)}
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactState}
+                  onChange={(e) => setContactState(e.target.value)}
                 />
               </div>
 
-              <div className="space-y-1">
-                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                   Postal code
                 </label>
                 <input
-                  className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
-                  value={profilePostal}
-                  onChange={(e) => setProfilePostal(e.target.value)}
+                  type="text"
+                  className="mt-1 w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-xs text-slate-100"
+                  value={contactPostal}
+                  onChange={(e) => setContactPostal(e.target.value)}
                 />
               </div>
             </div>
 
             <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-[11px] text-slate-400">
-                This information is visible to the office and used for
-                pay and contact purposes.
+                This info is shared with the office only.
               </div>
               <button
                 type="button"
-                disabled={profileSaving}
-                onClick={saveProfile}
+                disabled={savingContact}
+                onClick={saveContactInfo}
                 className="rounded-full bg-amber-400 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
               >
-                {profileSaving ? "Saving…" : "Save profile"}
+                {savingContact ? "Saving…" : "Save contact info"}
               </button>
             </div>
 
-            {profileMessage && (
+            {contactMessage && (
               <p className="mt-3 text-xs text-emerald-300">
-                {profileMessage}
+                {contactMessage}
               </p>
             )}
-            {profileError && (
-              <p className="mt-3 text-xs text-red-300">{profileError}</p>
+            {contactError && (
+              <p className="mt-3 text-xs text-red-300">{contactError}</p>
             )}
           </section>
         )}
 
-        {/* Shifts + correction form (unchanged) */}
+        {/* Shifts table + filter */}
         {!loading && !error && (
-          <div className="card bg-slate-900/80 border border-slate-700/80">
-            <div className="mb-3 flex items-center justify-between gap-4">
-              <h2 className="text-sm font-semibold text-slate-100">
-                Recent shifts
-              </h2>
-              <p className="text-[11px] text-slate-400">
-                Showing up to 50 most recent shifts. Request changes below.
-              </p>
+          <section className="card bg-slate-900/80 border border-slate-700/80">
+            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-100">
+                  Shifts in selected range
+                </h2>
+                <p className="text-[11px] text-slate-400">
+                  Adjust the dates to look back at previous pay periods.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2 text-[11px] text-slate-300 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-2">
+                  <span>From</span>
+                  <input
+                    type="date"
+                    className="rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px]"
+                    value={filterStart}
+                    onChange={(e) => setFilterStart(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span>To</span>
+                  <input
+                    type="date"
+                    className="rounded-lg border border-slate-700 bg-slate-900/80 px-2 py-1 text-[11px]"
+                    value={filterEnd}
+                    onChange={(e) => setFilterEnd(e.target.value)}
+                  />
+                </div>
+              </div>
             </div>
 
             <div className="mt-2 overflow-x-auto">
@@ -457,18 +563,18 @@ export default function WorkerProfilePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(!data || data.shifts.length === 0) && (
+                  {filteredShifts.length === 0 && (
                     <tr>
                       <td
                         colSpan={6}
                         className="px-3 py-6 text-center text-slate-400"
                       >
-                        No shifts recorded yet.
+                        No shifts in this date range.
                       </td>
                     </tr>
                   )}
 
-                  {data?.shifts.map((shift) => (
+                  {filteredShifts.map((shift) => (
                     <tr
                       key={shift.id}
                       className="border-b border-slate-800/80"
@@ -511,6 +617,7 @@ export default function WorkerProfilePage() {
               </table>
             </div>
 
+            {/* Correction form */}
             {selectedShift && (
               <div className="mt-6 rounded-2xl border border-slate-700 bg-slate-900/90 px-4 py-4 sm:px-5 sm:py-5">
                 <div className="flex items-start justify-between gap-3">
@@ -619,7 +726,63 @@ export default function WorkerProfilePage() {
                 )}
               </div>
             )}
-          </div>
+          </section>
+        )}
+
+        {/* Documents (read-only) */}
+        {!loading && !error && (
+          <section className="card bg-slate-900/80 border border-slate-700/80">
+            <div className="mb-3 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-100">
+                  My documents
+                </h2>
+                <p className="text-[11px] text-slate-400">
+                  Forms and files shared with you by the office.
+                </p>
+              </div>
+            </div>
+
+            {visibleDocuments.length === 0 ? (
+              <p className="text-xs text-slate-400">
+                No documents have been shared with you yet.
+              </p>
+            ) : (
+              <div className="mt-2 overflow-x-auto">
+                <table className="admin-table min-w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800/80">
+                      <th className="px-3 py-2 text-left">Title</th>
+                      <th className="px-3 py-2 text-left">Description</th>
+                      <th className="px-3 py-2 text-left">Uploaded</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleDocuments.map((doc) => (
+                      <tr key={doc.id} className="border-b border-slate-800/80">
+                        <td className="px-3 py-2 align-middle">
+                          <a
+                            href={doc.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-amber-300 hover:underline"
+                          >
+                            {doc.title}
+                          </a>
+                        </td>
+                        <td className="px-3 py-2 align-middle text-slate-300">
+                          {doc.description ?? "—"}
+                        </td>
+                        <td className="px-3 py-2 align-middle text-slate-400">
+                          {formatDateTime(doc.createdAt)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         )}
       </div>
     </div>

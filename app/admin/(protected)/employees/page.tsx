@@ -1,8 +1,8 @@
-// app/admin/(protected)/employees/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link"; // NEW: for worker portal link
+import type React from "react";
+import Link from "next/link";
 
 type AdminUser = {
   id: string;
@@ -10,25 +10,22 @@ type AdminUser = {
   email: string | null;
   employeeCode: string | null;
   active: boolean;
-  createdAt: string; // serialized from API
-  hourlyRate: number | null;
-  salaryAnnnual: number | null; // NOTE: matches Prisma field name
+  createdAt: string;
+
+  phone?: string | null;
+  hourlyRate?: number | null;
+  // salaryAnnual?: number | null; // future
+  adminNotes?: string | null;
 };
 
-function formatPay(user: AdminUser): string {
-  if (typeof user.hourlyRate === "number" && !Number.isNaN(user.hourlyRate)) {
-    return `$${user.hourlyRate.toFixed(2)}/hr`;
-  }
-  if (
-    typeof user.salaryAnnnual === "number" &&
-    !Number.isNaN(user.salaryAnnnual)
-  ) {
-    return `$${user.salaryAnnnual.toLocaleString("en-US", {
-      maximumFractionDigits: 0,
-    })}/yr`;
-  }
-  return "Not set";
-}
+type EmployeeDocument = {
+  id: string;
+  title: string;
+  url: string;
+  description: string | null;
+  visibleToWorker: boolean;
+  createdAt: string;
+};
 
 export default function AdminEmployeesPage() {
   const [employees, setEmployees] = useState<AdminUser[]>([]);
@@ -42,14 +39,20 @@ export default function AdminEmployeesPage() {
   const [editEmail, setEditEmail] = useState("");
   const [editEmployeeCode, setEditEmployeeCode] = useState("");
   const [editActive, setEditActive] = useState(true);
-  const [editPin, setEditPin] = useState(""); // new PIN (optional)
+  const [editPin, setEditPin] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editHourlyRate, setEditHourlyRate] = useState<string>("");
+  const [editAdminNotes, setEditAdminNotes] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [editPayMode, setEditPayMode] = useState<"none" | "hourly" | "salary">(
-    "none"
-  );
-  const [editHourlyRate, setEditHourlyRate] = useState("");
-  const [editSalaryAnnual, setEditSalaryAnnual] = useState("");
+
+  const [documents, setDocuments] = useState<EmployeeDocument[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [newDocTitle, setNewDocTitle] = useState("");
+  const [newDocUrl, setNewDocUrl] = useState("");
+  const [newDocVisible, setNewDocVisible] = useState(true);
+  const [docError, setDocError] = useState<string | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -154,100 +157,84 @@ export default function AdminEmployeesPage() {
     setEditEmployeeCode(user.employeeCode ?? "");
     setEditActive(user.active);
     setEditPin("");
+    setEditPhone(user.phone ?? "");
+    setEditHourlyRate(
+      typeof user.hourlyRate === "number" ? String(user.hourlyRate) : ""
+    );
+    setEditAdminNotes(user.adminNotes ?? "");
     setEditError(null);
-    // Initialize pay mode + values
-    if (typeof user.hourlyRate === "number" && !Number.isNaN(user.hourlyRate)) {
-      setEditPayMode("hourly");
-      setEditHourlyRate(user.hourlyRate.toString());
-      setEditSalaryAnnual("");
-    } else if (
-      typeof user.salaryAnnnual === "number" &&
-      !Number.isNaN(user.salaryAnnnual)
-    ) {
-      setEditPayMode("salary");
-      setEditSalaryAnnual(user.salaryAnnnual.toString());
-      setEditHourlyRate("");
-    } else {
-      setEditPayMode("none");
-      setEditHourlyRate("");
-      setEditSalaryAnnual("");
-    }
+
+    // reset and load documents for this employee
+    setDocuments([]);
+    setDocsLoading(true);
+    setDocError(null);
+    setNewDocTitle("");
+    setNewDocUrl("");
+    setNewDocVisible(true);
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/admin/employees/${user.id}/documents`);
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(body?.error ?? "Failed to load documents.");
+        }
+        const docs = (await res.json()) as EmployeeDocument[];
+        setDocuments(docs);
+      } catch (err: any) {
+        console.error(err);
+        setDocError(err.message ?? "Could not load documents.");
+      } finally {
+        setDocsLoading(false);
+      }
+    })();
   }
 
   function closeEdit() {
     setEditingUser(null);
     setEditPin("");
     setEditError(null);
-    setEditPayMode("none");
-    setEditHourlyRate("");
-    setEditSalaryAnnual("");
+    setDocuments([]);
+    setDocError(null);
+    setDocsLoading(false);
+    setNewDocTitle("");
+    setNewDocUrl("");
+    setNewDocVisible(true);
   }
 
   async function handleSaveEdit() {
     if (!editingUser) return;
 
-    // Validate PIN if provided
     if (editPin.trim().length > 0 && !/^\d{4}$/.test(editPin.trim())) {
       setEditError("PIN must be exactly 4 digits (0–9).");
       return;
     }
 
+    let hourlyRateNumber: number | null = null;
+    if (editHourlyRate.trim().length > 0) {
+      const n = Number(editHourlyRate.trim());
+      if (!Number.isFinite(n) || n < 0) {
+        setEditError("Hourly rate must be a non-negative number.");
+        return;
+      }
+      hourlyRateNumber = n;
+    }
+
     setSavingEdit(true);
     setEditError(null);
 
-    let hourlyNumber: number | null = null;
-    let salaryNumber: number | null = null;
-
-    if (editPayMode === "hourly") {
-      if (!editHourlyRate.trim()) {
-        setSavingEdit(false);
-        setEditError("Please enter an hourly rate or choose a different pay mode.");
-        return;
-      }
-      const parsed = parseFloat(editHourlyRate.trim());
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        setSavingEdit(false);
-        setEditError("Hourly rate must be a positive number.");
-        return;
-      }
-      hourlyNumber = parsed;
-      salaryNumber = null;
-    } else if (editPayMode === "salary") {
-      if (!editSalaryAnnual.trim()) {
-        setSavingEdit(false);
-        setEditError("Please enter an annual salary or choose a different pay mode.");
-        return;
-      }
-      const parsed = parseFloat(editSalaryAnnual.trim());
-      if (!Number.isFinite(parsed) || parsed < 0) {
-        setSavingEdit(false);
-        setEditError("Annual salary must be a positive number.");
-        return;
-      }
-      salaryNumber = parsed;
-      hourlyNumber = null;
-    } else {
-      // "none" -> explicitly clear both on save
-      hourlyNumber = null;
-      salaryNumber = null;
-    }
-
     try {
-      const body: {
-        name?: string;
-        email?: string | null;
-        employeeCode?: string | null;
-        active?: boolean;
-        pin?: string;
-        hourlyRate?: number | null;
-        salaryAnnnual?: number | null;
-      } = {
+      const body: any = {
         name: editName.trim(),
         email: editEmail.trim() || null,
         employeeCode: editEmployeeCode.trim() || null,
         active: editActive,
-        hourlyRate: hourlyNumber,
-        salaryAnnnual: salaryNumber,
+        phone: editPhone.trim() || null,
+        hourlyRate: hourlyRateNumber,
+        adminNotes:
+          editAdminNotes.trim().length > 0 ? editAdminNotes.trim() : null,
       };
 
       if (editPin.trim().length > 0) {
@@ -275,7 +262,6 @@ export default function AdminEmployeesPage() {
 
       const updated = data as AdminUser;
 
-      // Update local list (we still never expose PIN)
       setEmployees((prev) =>
         prev.map((u) => (u.id === updated.id ? updated : u))
       );
@@ -289,6 +275,161 @@ export default function AdminEmployeesPage() {
     }
   }
 
+  async function handleUploadFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setDocError(null);
+    setUploadingFile(true);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const body = (await res.json().catch(() => null)) as
+        | { url?: string; error?: string }
+        | null;
+
+      if (!res.ok || !body?.url) {
+        throw new Error(body?.error ?? "Upload failed.");
+      }
+
+      // Pre-fill URL and title for the new document
+      setNewDocUrl(body.url);
+      if (!newDocTitle.trim()) {
+        setNewDocTitle(file.name.replace(/\.[^.]+$/, ""));
+      }
+    } catch (err: any) {
+      console.error(err);
+      setDocError(err.message ?? "Unable to upload file.");
+    } finally {
+      setUploadingFile(false);
+      // allow selecting the same file again later
+      e.target.value = "";
+    }
+  }
+
+  async function handleAddDocument() {
+    if (!editingUser) return;
+    if (!newDocTitle.trim() || !newDocUrl.trim()) {
+      setDocError("Title and URL are required.");
+      return;
+    }
+
+    setDocError(null);
+    try {
+      const res = await fetch(
+        `/api/admin/employees/${editingUser.id}/documents`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: newDocTitle.trim(),
+            url: newDocUrl.trim(),
+            visibleToWorker: newDocVisible,
+          }),
+        }
+      );
+
+      const body = (await res.json().catch(() => null)) as
+        | EmployeeDocument
+        | { error?: string }
+        | null;
+
+      if (!res.ok || !body || "error" in body) {
+        throw new Error(
+          (body as any)?.error ?? "Failed to create document."
+        );
+      }
+
+      const doc = body as EmployeeDocument;
+      setDocuments((prev) => [doc, ...prev]);
+      setNewDocTitle("");
+      setNewDocUrl("");
+      setNewDocVisible(true);
+    } catch (err: any) {
+      console.error(err);
+      setDocError(err.message ?? "Unable to add document.");
+    }
+  }
+
+  async function handleToggleDocVisibility(doc: EmployeeDocument) {
+    if (!editingUser) return;
+    setDocError(null);
+
+    try {
+      const res = await fetch(
+        `/api/admin/employees/${editingUser.id}/documents/${doc.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            visibleToWorker: !doc.visibleToWorker,
+          }),
+        }
+      );
+
+      const body = (await res.json().catch(() => null)) as
+        | EmployeeDocument
+        | { error?: string }
+        | null;
+
+      if (!res.ok || !body || "error" in body) {
+        throw new Error(
+          (body as any)?.error ?? "Failed to update document."
+        );
+      }
+
+      const updated = body as EmployeeDocument;
+      setDocuments((prev) =>
+        prev.map((d) => (d.id === updated.id ? updated : d))
+      );
+    } catch (err: any) {
+      console.error(err);
+      setDocError(err.message ?? "Unable to update document.");
+    }
+  }
+
+  async function handleDeleteDoc(doc: EmployeeDocument) {
+    if (!editingUser) return;
+    if (
+      !window.confirm(
+        `Delete document "${doc.title}"? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+
+    setDocError(null);
+
+    try {
+      const res = await fetch(
+        `/api/admin/employees/${editingUser.id}/documents/${doc.id}`,
+        {
+          method: "DELETE",
+        }
+      );
+
+      const body = (await res.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+
+      if (!res.ok || (body && body.error)) {
+        throw new Error(body?.error ?? "Failed to delete document.");
+      }
+
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+    } catch (err: any) {
+      console.error(err);
+      setDocError(err.message ?? "Unable to delete document.");
+    }
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -296,7 +437,8 @@ export default function AdminEmployeesPage() {
         <h1 className="text-2xl font-semibold text-slate-50">Employees</h1>
         <p className="mt-1 text-sm text-slate-400">
           Manage workers, review pending accounts, reset PINs, and control who
-          can clock in.
+          can clock in. Click through to see each worker&apos;s self-service
+          page.
         </p>
       </div>
 
@@ -385,7 +527,7 @@ export default function AdminEmployeesPage() {
                           disabled={actingId === u.id}
                           className="rounded-full bg-red-500/80 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-red-400 disabled:opacity-60"
                         >
-                          {actingId === u.id ? "Rejecting…" : "Reject"}
+                          {actingId === u.id ? "Removing…" : "Reject"}
                         </button>
                       </div>
                     </td>
@@ -419,8 +561,8 @@ export default function AdminEmployeesPage() {
 
         {!loading && active.length === 0 && (
           <p className="text-xs text-slate-400">
-            No active employees yet. Approve pending workers above, or use your
-            existing admin tools to add employees manually.
+            No active employees yet. Approve pending workers above, or add
+            employees via your other tools.
           </p>
         )}
 
@@ -432,8 +574,8 @@ export default function AdminEmployeesPage() {
                   <th className="px-3 py-2 text-left">Name</th>
                   <th className="px-3 py-2 text-left">Employee code</th>
                   <th className="px-3 py-2 text-left">Email</th>
+                  <th className="px-3 py-2 text-left">Phone</th>
                   <th className="px-3 py-2 text-left">Pay</th>
-                  <th className="px-3 py-2 text-left">Status</th>
                   <th className="px-3 py-2 text-right">Actions</th>
                 </tr>
               </thead>
@@ -451,22 +593,36 @@ export default function AdminEmployeesPage() {
                     <td className="px-3 py-2 align-middle text-slate-300">
                       {u.email ?? "—"}
                     </td>
-                    <td className="px-3 py-2 align-middle text-slate-200">
-                      {formatPay(u)}
+                    <td className="px-3 py-2 align-middle text-slate-300">
+                      {u.phone ?? "—"}
                     </td>
-                    <td className="px-3 py-2 align-middle">
-                      <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-semibold text-emerald-300 border border-emerald-500/40">
-                        Can clock in
-                      </span>
+                    <td className="px-3 py-2 align-middle text-slate-200">
+                      {typeof u.hourlyRate === "number"
+                        ? `$${u.hourlyRate.toFixed(2)}/hr`
+                        : "—"}
                     </td>
                     <td className="px-3 py-2 align-middle text-right">
                       <div className="inline-flex gap-2">
+                        {u.employeeCode && (
+                          <Link
+                            href={`/worker/${encodeURIComponent(u.employeeCode)}`}
+                            className="rounded-full border border-slate-600 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-slate-700/70"
+                          >
+                            Worker page
+                          </Link>
+                        )}
+                        <Link
+                          href={`/admin/employees/${u.id}`}
+                          className="rounded-full bg-slate-800 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-slate-700"
+                        >
+                          View profile
+                        </Link>
                         <button
                           type="button"
                           onClick={() => openEdit(u)}
                           className="rounded-full bg-slate-700/80 px-3 py-1 text-[11px] font-semibold text-slate-50 hover:bg-slate-600"
                         >
-                          Edit / Reset PIN
+                          Edit / Pay / PIN
                         </button>
                         <button
                           type="button"
@@ -476,16 +632,6 @@ export default function AdminEmployeesPage() {
                         >
                           {actingId === u.id ? "Deleting…" : "Delete"}
                         </button>
-
-                        {/* NEW: link to worker portal page */}
-                        <Link
-                          href={`/worker/${encodeURIComponent(
-                            u.employeeCode ?? u.id
-                          )}`}
-                          className="rounded-full border border-slate-600 px-3 py-1 text-[11px] font-semibold text-slate-100 hover:bg-slate-800"
-                        >
-                          Worker page
-                        </Link>
                       </div>
                     </td>
                   </tr>
@@ -498,154 +644,300 @@ export default function AdminEmployeesPage() {
 
       {/* Edit modal */}
       {editingUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-md rounded bg-slate-900 p-6">
-            <h3 className="mb-4 text-lg font-semibold text-slate-50">
-              Edit employee: {editingUser.name || "Unnamed"}
-            </h3>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 p-6 shadow-2xl">
+            <h2 className="text-sm font-semibold text-slate-100 mb-1">
+              Edit employee
+            </h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Update contact info, hourly rate, or set a new 4-digit PIN.
+            </p>
 
-            {editError && (
-              <div className="mb-4 rounded bg-red-600/80 p-2 text-sm text-red-100">
-                {editError}
-              </div>
-            )}
-
-            <label className="mb-2 block text-sm font-semibold text-slate-200">
-              Name
-              <input
-                type="text"
-                value={editName}
-                onChange={(e) => setEditName(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-50"
-                autoFocus
-              />
-            </label>
-
-            <label className="mb-2 block text-sm font-semibold text-slate-200">
-              Email (optional)
-              <input
-                type="email"
-                value={editEmail}
-                onChange={(e) => setEditEmail(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-50"
-              />
-            </label>
-
-            <label className="mb-2 block text-sm font-semibold text-slate-200">
-              Employee code (optional)
-              <input
-                type="text"
-                value={editEmployeeCode}
-                onChange={(e) => setEditEmployeeCode(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-50"
-              />
-            </label>
-
-            <label className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-200">
-              <input
-                type="checkbox"
-                checked={editActive}
-                onChange={(e) => setEditActive(e.target.checked)}
-              />
-              Active (can clock in)
-            </label>
-
-            {/* Compensation section */}
-            <div className="mb-4 rounded border border-slate-700 bg-slate-900/80 p-3">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Compensation
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  className="mt-1 w-full"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                />
               </div>
 
-              <div className="mb-3 flex flex-wrap gap-3 text-xs text-slate-200">
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="radio"
-                    name="payMode"
-                    value="none"
-                    checked={editPayMode === "none"}
-                    onChange={() => setEditPayMode("none")}
-                  />
-                  <span>No pay set</span>
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Email
                 </label>
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="radio"
-                    name="payMode"
-                    value="hourly"
-                    checked={editPayMode === "hourly"}
-                    onChange={() => setEditPayMode("hourly")}
-                  />
-                  <span>Hourly</span>
-                </label>
-                <label className="inline-flex items-center gap-1">
-                  <input
-                    type="radio"
-                    name="payMode"
-                    value="salary"
-                    checked={editPayMode === "salary"}
-                    onChange={() => setEditPayMode("salary")}
-                  />
-                  <span>Salary</span>
-                </label>
+                <input
+                  type="email"
+                  className="mt-1 w-full"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                />
               </div>
 
-              {editPayMode === "hourly" && (
-                <div className="mb-2">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Hourly rate (USD)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={editHourlyRate}
-                    onChange={(e) => setEditHourlyRate(e.target.value)}
-                    className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-sm text-slate-50"
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Employee code
+                </label>
+                <input
+                  type="text"
+                  className="mt-1 w-full"
+                  value={editEmployeeCode}
+                  onChange={(e) => setEditEmployeeCode(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Phone
+                </label>
+                <input
+                  type="tel"
+                  className="mt-1 w-full"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Hourly rate (USD)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  className="mt-1 w-full"
+                  value={editHourlyRate}
+                  onChange={(e) => setEditHourlyRate(e.target.value)}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Salary support can be layered in later; for now we track base
+                  hourly pay.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Active (can clock in)
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setEditActive((prev) => !prev)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+                    editActive ? "bg-emerald-500" : "bg-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition ${
+                      editActive ? "translate-x-5" : "translate-x-1"
+                    }`}
                   />
+                </button>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  New PIN (optional)
+                </label>
+                <input
+                  type="password"
+                  maxLength={4}
+                  inputMode="numeric"
+                  pattern="\d{4}"
+                  placeholder="••••"
+                  className="mt-1 w-full"
+                  value={editPin}
+                  onChange={(e) => setEditPin(e.target.value)}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Must be exactly 4 digits if provided.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
+                  Admin notes (private)
+                </label>
+                <textarea
+                  rows={3}
+                  className="mt-1 w-full"
+                  value={editAdminNotes}
+                  onChange={(e) => setEditAdminNotes(e.target.value)}
+                  placeholder="Notes here are only visible to admins."
+                />
+              </div>
+
+              {/* Documents section */}
+              <div className="mt-4 border-t border-slate-700 pt-4">
+                <h3 className="text-xs font-semibold text-slate-200 mb-2">
+                  Documents for this employee
+                </h3>
+                <p className="text-[11px] text-slate-400 mb-3">
+                  Attach links to contracts, licenses, or other files. Toggle whether
+                  the worker can see each one on their portal.
+                </p>
+
+                <div className="mb-3 grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] items-end">
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      Title
+                    </label>
+                    <input
+                      type="text"
+                      className="mt-1 w-full"
+                      value={newDocTitle}
+                      onChange={(e) => setNewDocTitle(e.target.value)}
+                      placeholder="e.g. W-4 form, Driver's license"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+                      URL
+                    </label>
+                    <input
+                      type="text"
+                      className="mt-1 w-full"
+                      value={newDocUrl}
+                      onChange={(e) => setNewDocUrl(e.target.value)}
+                      placeholder="Paste a link (Google Drive, Dropbox, etc.)"
+                    />
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="h-3 w-3"
+                          checked={newDocVisible}
+                          onChange={(e) => setNewDocVisible(e.target.checked)}
+                        />
+                        Visible to worker
+                      </label>
+
+                      <label className="inline-flex items-center gap-1 cursor-pointer">
+                        <span className="rounded-full border border-slate-600 px-2 py-1 text-[10px] text-slate-100 hover:bg-slate-700">
+                          Upload PDF from computer
+                        </span>
+                        <input
+                          type="file"
+                          accept="application/pdf"
+                          className="hidden"
+                          onChange={handleUploadFile}
+                        />
+                      </label>
+
+                      {uploadingFile && (
+                        <span className="text-[10px] text-slate-300">
+                          Uploading…
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddDocument}
+                    className="rounded-full bg-amber-400 px-3 py-2 text-[11px] font-semibold text-slate-950 hover:bg-amber-300"
+                  >
+                    Add
+                  </button>
                 </div>
-              )}
 
-              {editPayMode === "salary" && (
-                <div className="mb-2">
-                  <label className="block text-xs font-semibold text-slate-300">
-                    Annual salary (USD)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="100"
-                    value={editSalaryAnnual}
-                    onChange={(e) => setEditSalaryAnnual(e.target.value)}
-                    className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-sm text-slate-50"
-                  />
-                </div>
-              )}
+                {docsLoading && (
+                  <p className="text-[11px] text-slate-400 mb-2">
+                    Loading documents…
+                  </p>
+                )}
 
-              <p className="mt-1 text-[11px] text-slate-400">
-                For now only one active rate is stored per employee. Future versions can support
-                pay history and scheduled changes without changing this screen.
-              </p>
+                {docError && (
+                  <p className="text-[11px] text-red-300 mb-2">{docError}</p>
+                )}
+
+                {!docsLoading && documents.length === 0 && !docError && (
+                  <p className="text-[11px] text-slate-500">
+                    No documents yet for this employee.
+                  </p>
+                )}
+
+                {documents.length > 0 && (
+                  <ul className="mt-2 space-y-2 max-h-40 overflow-auto pr-1">
+                    {documents.map((doc) => (
+                      <li
+                        key={doc.id}
+                        className="flex items-start justify-between gap-3 rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={doc.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[11px] font-semibold text-sky-300 hover:underline truncate"
+                              title={doc.title}
+                            >
+                              {doc.title}
+                            </a>
+                            <span
+                              className={
+                                "inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-medium border " +
+                                (doc.visibleToWorker
+                                  ? "bg-emerald-500/10 text-emerald-200 border-emerald-500/50"
+                                  : "bg-slate-700/40 text-slate-200 border-slate-500/60")
+                              }
+                            >
+                              {doc.visibleToWorker ? "Worker can see" : "Admin only"}
+                            </span>
+                          </div>
+                          {doc.description && (
+                            <p className="mt-1 text-[10px] text-slate-400 line-clamp-2">
+                              {doc.description}
+                            </p>
+                          )}
+                          <p className="mt-1 text-[9px] text-slate-500">
+                            Added{" "}
+                            {new Date(doc.createdAt).toLocaleString("en-US", {
+                              month: "2-digit",
+                              day: "2-digit",
+                              year: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleDocVisibility(doc)}
+                            className="rounded-full border border-slate-600 px-2 py-0.5 text-[9px] text-slate-100 hover:bg-slate-700"
+                          >
+                            {doc.visibleToWorker ? "Hide from worker" : "Show to worker"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDoc(doc)}
+                            className="rounded-full border border-red-500/60 px-2 py-0.5 text-[9px] text-red-200 hover:bg-red-500/20"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {editError && (
+                <p className="text-xs text-red-300">{editError}</p>
+              )}
             </div>
 
-            <label className="mb-4 block text-sm font-semibold text-slate-200">
-              Reset PIN (4 digits, optional)
-              <input
-                type="password"
-                value={editPin}
-                onChange={(e) => setEditPin(e.target.value)}
-                className="mt-1 w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-slate-50"
-                maxLength={4}
-                inputMode="numeric"
-                pattern="\d{4}"
-              />
-            </label>
-
-            <div className="flex justify-end gap-3">
+            <div className="mt-6 flex justify-end gap-3">
               <button
                 type="button"
                 onClick={closeEdit}
                 disabled={savingEdit}
-                className="rounded bg-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-slate-600 disabled:opacity-60"
+                className="rounded-full border border-slate-600 px-4 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -653,9 +945,9 @@ export default function AdminEmployeesPage() {
                 type="button"
                 onClick={handleSaveEdit}
                 disabled={savingEdit}
-                className="rounded bg-emerald-600 px-4 py-2 text-sm font-semibold text-slate-100 hover:bg-emerald-500 disabled:opacity-60"
+                className="rounded-full bg-amber-400 px-4 py-1.5 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
               >
-                {savingEdit ? "Saving…" : "Save"}
+                {savingEdit ? "Saving…" : "Save changes"}
               </button>
             </div>
           </div>

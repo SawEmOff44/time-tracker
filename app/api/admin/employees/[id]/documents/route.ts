@@ -1,125 +1,86 @@
+// app/api/admin/employees/[id]/documents/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-type RouteParams = { params: { id: string } };
-
-// GET all docs for an employee (admin)
-export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { id: userId } = params;
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const { id } = params;
 
   try {
     const docs = await prisma.employeeDocument.findMany({
-      where: { userId },
+      where: { userId: id },
       orderBy: { createdAt: "desc" },
     });
-    return NextResponse.json(docs);
-  } catch (err) {
-    console.error("Error loading employee docs", err);
+
     return NextResponse.json(
-      { error: "Failed to load employee documents" },
+      docs.map((d) => ({
+        id: d.id,
+        title: d.title,
+        url: d.url,
+        description: d.description,
+        visibleToWorker: d.visibleToWorker,
+        createdAt: d.createdAt.toISOString(),
+      }))
+    );
+  } catch (err) {
+    console.error("Error loading documents", err);
+    return NextResponse.json(
+      { error: "Failed to load documents." },
       { status: 500 }
     );
   }
 }
 
-// POST – admin attaches a document (by URL)
-export async function POST(req: NextRequest, { params }: RouteParams) {
-  const { id: userId } = params;
+export async function POST(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const { id } = params;
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body." },
+      { status: 400 }
+    );
+  }
+
+  const { title, url, description, visibleToWorker } = body ?? {};
+
+  if (!title || !url) {
+    return NextResponse.json(
+      { error: "Title and URL are required." },
+      { status: 400 }
+    );
+  }
 
   try {
-    const body = await req.json();
-    const { name, fileUrl, visibleToWorker = true } = body as {
-      name?: string;
-      fileUrl?: string;
-      visibleToWorker?: boolean;
-    };
-
-    if (!name || !fileUrl) {
-      return NextResponse.json(
-        { error: "name and fileUrl are required" },
-        { status: 400 }
-      );
-    }
-
-    const created = await prisma.employeeDocument.create({
+    const doc = await prisma.employeeDocument.create({
       data: {
-        userId,
-        name: name.trim(),
-        fileUrl: fileUrl.trim(),
-        visibleToWorker: !!visibleToWorker,
-        uploadedByAdmin: true,
+        userId: id,
+        title: title.trim(),
+        url: url.trim(),
+        description: description?.trim() || null,
+        visibleToWorker: Boolean(visibleToWorker),
       },
     });
 
-    return NextResponse.json(created, { status: 201 });
-  } catch (err) {
-    console.error("Error creating employee document", err);
-    return NextResponse.json(
-      { error: "Failed to create document" },
-      { status: 500 }
-    );
-  }
-}
-
-// PATCH – toggle visibility
-export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { id: userId } = params;
-
-  try {
-    const body = await req.json();
-    const { docId, visibleToWorker } = body as {
-      docId?: string;
-      visibleToWorker?: boolean;
-    };
-
-    if (!docId) {
-      return NextResponse.json(
-        { error: "docId is required" },
-        { status: 400 }
-      );
-    }
-
-    const updated = await prisma.employeeDocument.update({
-      where: { id: docId },
-      data: {
-        visibleToWorker:
-          typeof visibleToWorker === "boolean" ? visibleToWorker : undefined,
-      },
+    return NextResponse.json({
+      id: doc.id,
+      title: doc.title,
+      url: doc.url,
+      description: doc.description,
+      visibleToWorker: doc.visibleToWorker,
+      createdAt: doc.createdAt.toISOString(),
     });
-
-    return NextResponse.json(updated);
   } catch (err) {
-    console.error("Error updating document", err);
+    console.error("Error creating document", err);
     return NextResponse.json(
-      { error: "Failed to update document" },
-      { status: 500 }
-    );
-  }
-}
-
-// DELETE – remove doc
-export async function DELETE(req: NextRequest, { params }: RouteParams) {
-  const { id: userId } = params;
-
-  try {
-    const { searchParams } = new URL(req.url);
-    const docId = searchParams.get("docId");
-    if (!docId) {
-      return NextResponse.json(
-        { error: "docId is required" },
-        { status: 400 }
-      );
-    }
-
-    await prisma.employeeDocument.delete({
-      where: { id: docId },
-    });
-
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("Error deleting document", err);
-    return NextResponse.json(
-      { error: "Failed to delete document" },
+      { error: "Failed to create document." },
       { status: 500 }
     );
   }
