@@ -11,16 +11,12 @@ type ClockResponse = {
   totalHoursThisPeriod: number | null;
 };
 
-type CorrectionType =
-  | "MISSING_IN"
-  | "MISSING_OUT"
-  | "ADJUST_IN"
-  | "ADJUST_OUT"
-  | "NEW_SHIFT";
-
-type CorrectionApiResponse =
-  | { ok: true; message: string }
-  | { error: string };
+type ClockLocation = {
+  id: string;
+  name: string;
+  code: string;
+  radiusMeters: number;
+};
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -53,18 +49,44 @@ export default function ClockPage() {
     "neutral" | "success" | "error"
   >("neutral");
 
-  // Correction modal state
-  const [showFixModal, setShowFixModal] = useState(false);
-  const [fixType, setFixType] = useState<CorrectionType>("MISSING_OUT");
-  const [fixDate, setFixDate] = useState<string>("");
-  const [fixStart, setFixStart] = useState<string>("");
-  const [fixEnd, setFixEnd] = useState<string>("");
-  const [fixReason, setFixReason] = useState<string>("");
-  const [fixSubmitting, setFixSubmitting] = useState(false);
-  const [fixStatus, setFixStatus] = useState<string | null>(null);
-  const [fixError, setFixError] = useState<string | null>(null);
+  // Locations for dropdown
+  const [locations, setLocations] = useState<ClockLocation[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
+  const [selectedLocationId, setSelectedLocationId] = useState<string>("");
 
-  // Grab GPS once when the page loads
+  // --- Load locations for dropdown ----------------------------------------
+  useEffect(() => {
+    async function loadLocations() {
+      try {
+        setLocationsLoading(true);
+        setLocationsError(null);
+
+        // Public locations endpoint (used already on admin)
+        const res = await fetch("/api/locations");
+        if (!res.ok) {
+          throw new Error("Failed to load locations");
+        }
+
+        const data = (await res.json()) as ClockLocation[];
+
+        // Only keep active, radius > 0 locations for the dropdown.
+        // "Other / ADHOC" will be added client-side.
+        const active = data.filter((loc) => loc);
+        setLocations(active);
+      } catch (err) {
+        console.error("Error loading locations", err);
+        setLocationsError("Could not load job site list.");
+        setLocations([]);
+      } finally {
+        setLocationsLoading(false);
+      }
+    }
+
+    void loadLocations();
+  }, []);
+
+  // --- Grab GPS once when the page loads -----------------------------------
   useEffect(() => {
     if (!("geolocation" in navigator)) {
       setLocationError("This device does not support GPS.");
@@ -85,7 +107,7 @@ export default function ClockPage() {
     );
   }, []);
 
-  // Simple timer while clocked in
+  // Simple client-side timer that runs while isClockedIn is true
   useEffect(() => {
     let id: number | undefined;
 
@@ -103,7 +125,19 @@ export default function ClockPage() {
   }, [isClockedIn]);
 
   async function handleClock() {
-    if (!employeeCode || !pin) return;
+    if (!employeeCode || !pin) {
+      setStatusVariant("error");
+      setStatusMessage("Employee code and PIN are required.");
+      return;
+    }
+
+    if (!selectedLocationId) {
+      setStatusVariant("error");
+      setStatusMessage("Please choose a job site, or 'Other (ADHOC)'.");
+      return;
+    }
+
+    const isAdhoc = selectedLocationId === "ADHOC";
 
     setSubmitting(true);
     setStatusMessage(null);
@@ -118,6 +152,8 @@ export default function ClockPage() {
           pin: pin.trim(),
           lat,
           lng,
+          locationId: isAdhoc ? null : selectedLocationId,
+          adhoc: isAdhoc,
         }),
       });
 
@@ -133,6 +169,7 @@ export default function ClockPage() {
 
       const data = (await res.json()) as ClockResponse;
 
+      // Update weekly hours
       if (typeof data.totalHoursThisPeriod === "number") {
         setHoursThisWeek(data.totalHoursThisPeriod);
       }
@@ -140,7 +177,9 @@ export default function ClockPage() {
       if (data.status === "clocked_in") {
         setIsClockedIn(true);
         setStatusVariant("success");
-        const locName = data.locationName ?? "ADHOC job site";
+        const locName =
+          data.locationName ??
+          (isAdhoc ? "ADHOC job site" : "job site not recorded");
         setStatusMessage(`Clocked in at ${locName}. Clock-in recorded.`);
       } else {
         setIsClockedIn(false);
@@ -156,7 +195,8 @@ export default function ClockPage() {
     }
   }
 
-  const canSubmit = !!employeeCode && !!pin && !submitting;
+  const canSubmit =
+    !!employeeCode && !!pin && !!selectedLocationId && !submitting;
 
   const statusPillClasses = isClockedIn
     ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/40"
@@ -175,105 +215,6 @@ export default function ClockPage() {
       ? "text-emerald-300"
       : "text-slate-200";
 
-  // --- Correction handling -------------------------------------------------
-
-  function resetFixForm() {
-    setFixType("MISSING_OUT");
-    setFixDate("");
-    setFixStart("");
-    setFixEnd("");
-    setFixReason("");
-    setFixStatus(null);
-    setFixError(null);
-  }
-
-  function openFixModal() {
-    if (!employeeCode || !pin) {
-      setStatusVariant("error");
-      setStatusMessage(
-        "Enter your employee code and PIN before requesting a fix."
-      );
-      return;
-    }
-    resetFixForm();
-    // Default date to today
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    setFixDate(`${yyyy}-${mm}-${dd}`);
-    setShowFixModal(true);
-  }
-
-  async function submitFixRequest() {
-    if (!employeeCode || !pin) {
-      setFixError("Enter your employee code and PIN first.");
-      return;
-    }
-    if (!fixDate) {
-      setFixError("Pick a date for the correction.");
-      return;
-    }
-
-    // Determine which times are needed
-    const needsStart =
-      fixType === "MISSING_IN" || fixType === "ADJUST_IN" || fixType === "NEW_SHIFT";
-    const needsEnd =
-      fixType === "MISSING_OUT" || fixType === "ADJUST_OUT" || fixType === "NEW_SHIFT";
-
-    if (needsStart && !fixStart) {
-      setFixError("Provide a start time (HH:MM).");
-      return;
-    }
-
-    if (needsEnd && !fixEnd) {
-      setFixError("Provide an end time (HH:MM).");
-      return;
-    }
-
-    setFixSubmitting(true);
-    setFixStatus(null);
-    setFixError(null);
-
-    try {
-      const res = await fetch("/api/clock/corrections", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          employeeCode: employeeCode.trim(),
-          pin: pin.trim(),
-          type: fixType,
-          date: fixDate,
-          clockIn: needsStart ? fixStart : undefined,
-          clockOut: needsEnd ? fixEnd : undefined,
-          reason: fixReason || undefined,
-        }),
-      });
-
-      const data = (await res.json().catch(() => null)) as
-        | CorrectionApiResponse
-        | null;
-
-      if (!res.ok || !data || "error" in data) {
-        const msg =
-          (data && "error" in data && data.error) ||
-          "Failed to submit correction request.";
-        setFixError(msg);
-        return;
-      }
-
-      setFixStatus(data.message);
-      // Also surface to main status bar as a “awaiting approval” vibe
-      setStatusVariant("neutral");
-      setStatusMessage("Correction submitted for approval. Awaiting review.");
-    } catch (err) {
-      console.error(err);
-      setFixError("Unexpected error submitting correction.");
-    } finally {
-      setFixSubmitting(false);
-    }
-  }
-
   return (
     <div className="min-h-screen flex items-center justify-center clock-stone-bg">
       {/* Outer shell with soft glow */}
@@ -285,7 +226,8 @@ export default function ClockPage() {
               Clock In / Out
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-1">
-              GPS is required. Make sure location services are enabled.
+              GPS is required. Choose the job site you&apos;re working at. Use
+              &quot;Other (ADHOC)&quot; only when there is no defined job site.
             </p>
           </div>
           <span
@@ -296,7 +238,7 @@ export default function ClockPage() {
         </div>
 
         {/* Hours row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/80">
             <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-slate-400">
               Hours this week
@@ -319,6 +261,34 @@ export default function ClockPage() {
               Timer runs while you&apos;re clocked in.
             </p>
           </div>
+        </div>
+
+        {/* Location select */}
+        <div className="mb-5">
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300 mb-1">
+            Job site
+          </label>
+          <select
+            className="w-full rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100"
+            value={selectedLocationId}
+            onChange={(e) => setSelectedLocationId(e.target.value)}
+          >
+            <option value="">Select job site...</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.name} ({loc.code})
+              </option>
+            ))}
+            <option value="ADHOC">Other (ADHOC / off-site)</option>
+          </select>
+          {locationsLoading && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Loading job sites…
+            </p>
+          )}
+          {locationsError && (
+            <p className="mt-1 text-[11px] text-red-300">{locationsError}</p>
+          )}
         </div>
 
         {/* Form */}
@@ -351,8 +321,9 @@ export default function ClockPage() {
 
           {locationError && (
             <p className="text-xs text-amber-300/90">
-              {locationError} We&apos;ll still record your time, but GPS
-              validation may fail.
+              {locationError} For defined job sites, GPS must be in range.
+              Choosing &quot;Other (ADHOC)&quot; skips GPS radius checks but may
+              be flagged for review.
             </p>
           )}
 
@@ -368,27 +339,18 @@ export default function ClockPage() {
               ? "Clock Out"
               : "Clock In"}
           </button>
-
-          {/* Secondary row: create account + request fix */}
-          <div className="mt-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-300">
-            <p className="text-center sm:text-left">
-              New worker?{" "}
-              <Link
-                href="/clock/create-account"
-                className="text-amber-300 hover:text-amber-200 underline underline-offset-4"
-              >
-                Create your account
-              </Link>
-            </p>
-            <button
-              type="button"
-              onClick={openFixModal}
-              className="text-xs text-sky-300 hover:text-sky-200 underline underline-offset-4 mx-auto sm:mx-0"
-            >
-              Missing or incorrect time? Request a fix
-            </button>
-          </div>
         </div>
+
+        {/* Self-service registration link */}
+        <p className="mt-4 text-xs text-slate-300 text-center">
+          New worker?{" "}
+          <Link
+            href="/clock/create-account"
+            className="text-amber-300 hover:text-amber-200 underline underline-offset-4"
+          >
+            Create your account
+          </Link>
+        </p>
 
         {/* Status message */}
         {statusMessage && (
@@ -397,132 +359,6 @@ export default function ClockPage() {
           </p>
         )}
       </div>
-
-      {/* Correction modal */}
-      {showFixModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-          <div className="w-full max-w-md rounded-2xl bg-slate-950 border border-slate-700 shadow-2xl p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-slate-50">
-                Request a time correction
-              </h2>
-              <button
-                type="button"
-                onClick={() => setShowFixModal(false)}
-                className="text-xs text-slate-400 hover:text-slate-200"
-              >
-                Close
-              </button>
-            </div>
-
-            <p className="text-[11px] text-slate-400 mb-4">
-              Your supervisor will review this request. Only shifts in the
-              current pay week can be corrected.
-            </p>
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                  Correction type
-                </label>
-                <select
-                  value={fixType}
-                  onChange={(e) => setFixType(e.target.value as CorrectionType)}
-                  className="mt-1 w-full"
-                >
-                  <option value="MISSING_OUT">Forgot to clock out</option>
-                  <option value="MISSING_IN">Forgot to clock in</option>
-                  <option value="ADJUST_IN">Start time is wrong</option>
-                  <option value="ADJUST_OUT">End time is wrong</option>
-                  <option value="NEW_SHIFT">Need a new shift added</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                  Date of shift
-                </label>
-                <input
-                  type="date"
-                  value={fixDate}
-                  onChange={(e) => setFixDate(e.target.value)}
-                  className="mt-1 w-full"
-                />
-              </div>
-
-              {(fixType === "MISSING_IN" ||
-                fixType === "ADJUST_IN" ||
-                fixType === "NEW_SHIFT") && (
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                    Correct start time
-                  </label>
-                  <input
-                    type="time"
-                    value={fixStart}
-                    onChange={(e) => setFixStart(e.target.value)}
-                    className="mt-1 w-full"
-                  />
-                </div>
-              )}
-
-              {(fixType === "MISSING_OUT" ||
-                fixType === "ADJUST_OUT" ||
-                fixType === "NEW_SHIFT") && (
-                <div>
-                  <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                    Correct end time
-                  </label>
-                  <input
-                    type="time"
-                    value={fixEnd}
-                    onChange={(e) => setFixEnd(e.target.value)}
-                    className="mt-1 w-full"
-                  />
-                </div>
-              )}
-
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-300">
-                  Reason (optional)
-                </label>
-                <textarea
-                  rows={3}
-                  value={fixReason}
-                  onChange={(e) => setFixReason(e.target.value)}
-                  placeholder="Ex: Forgot to clock out when leaving job site."
-                  className="mt-1 w-full"
-                />
-              </div>
-
-              {fixError && (
-                <p className="text-[11px] text-red-400">{fixError}</p>
-              )}
-              {fixStatus && (
-                <p className="text-[11px] text-emerald-300">{fixStatus}</p>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowFixModal(false)}
-                  className="text-xs px-3 py-1 rounded-full border border-slate-700 text-slate-200 hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={submitFixRequest}
-                  disabled={fixSubmitting}
-                  className="text-xs px-3 py-1 rounded-full bg-sky-500 text-slate-950 font-semibold hover:bg-sky-400 disabled:opacity-60"
-                >
-                  {fixSubmitting ? "Submitting..." : "Submit for approval"}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

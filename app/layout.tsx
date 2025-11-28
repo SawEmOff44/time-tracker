@@ -41,20 +41,28 @@ export default function RootLayout({
               </div>
             </Link>
 
-            <nav className="flex items-center gap-3 text-sm">
-              <Link
-                href="/clock"
-                className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
-              >
-                Clock In / Out
-              </Link>
-              <Link
-                href="/admin"
-                className="rounded-full border border-slate-600 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm hover:bg-amber-300"
-              >
-                Admin
-              </Link>
-            </nav>
+<nav className="flex items-center gap-3 text-sm">
+  <Link
+    href="/clock"
+    className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
+  >
+    Clock In / Out
+  </Link>
+
+  <Link
+    href="/worker/login"
+    className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
+  >
+    Worker Portal
+  </Link>
+
+  <Link
+    href="/admin"
+    className="rounded-full border border-slate-600 bg-amber-400 px-3 py-1.5 text-xs font-semibold text-slate-900 shadow-sm hover:bg-amber-300"
+  >
+    Admin
+  </Link>
+</nav>
           </div>
         </header>
 

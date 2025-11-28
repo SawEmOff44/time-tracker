@@ -23,9 +23,16 @@ model User {
   email        String?
   pinHash      String?
   active       Boolean @default(true)
-
   defaultLocationId String?
   defaultLocation   Location? @relation("UserDefaultLocation", fields: [defaultLocationId], references: [id])
+  phone         String?
+  addressLine1  String?
+  addressLine2  String?
+  city          String?
+  state         String?
+  postalcode    String?
+  adminNotes    String?
+  documents     EmployeeDocument[]
 
   shifts                  Shift[]
   shiftCorrectionRequests ShiftCorrectionRequest[]
@@ -107,4 +114,17 @@ model ShiftCorrectionRequest {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model EmployeeDocument {
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String
+
+  name            String              // e.g. "W-4 2025" or "Forklift cert"
+  fileUrl         String              // URL to the file (S3, Drive, etc.)
+  visibleToWorker Boolean  @default(true)
+  uploadedByAdmin Boolean  @default(false)
+
+  createdAt       DateTime @default(now())
 }

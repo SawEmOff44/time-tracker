@@ -67,12 +67,109 @@ function statusBadgeClasses(status: CorrectionStatus) {
 async function updateRequestStatus(id: string, status: CorrectionStatus) {
   "use server";
 
+  // Load full correction so we can act on the base Shift
+  const correction = await prismaAny.shiftCorrectionRequest.findUnique({
+    where: { id },
+    include: {
+      shift: true,
+      user: true,
+    },
+  });
+
+  if (!correction) {
+    console.warn(`ShiftCorrectionRequest ${id} not found`);
+    return;
+  }
+
+  let updatedShift: any = null;
+
+  if (status === "APPROVED") {
+    const {
+      type,
+      shiftId,
+      requestedClockIn,
+      requestedClockOut,
+      userId,
+      reason,
+    } = correction as {
+      type: ShiftCorrectionType;
+      shiftId: string | null;
+      requestedClockIn: Date | null;
+      requestedClockOut: Date | null;
+      userId: string;
+      reason: string | null;
+      shift: {
+        id: string;
+        notes: string | null;
+        locationId: string | null;
+      } | null;
+    };
+
+    // 1) NEW_SHIFT => create a brand new Shift row
+    if (type === "NEW_SHIFT") {
+      if (!requestedClockIn && !requestedClockOut) {
+        console.warn(
+          `NEW_SHIFT correction ${id} missing requestedClockIn/out; skipping shift create.`
+        );
+      } else {
+        const locationId =
+          correction.shift && correction.shift.locationId
+            ? correction.shift.locationId
+            : null;
+
+        updatedShift = await prismaAny.shift.create({
+          data: {
+            userId,
+            locationId,
+            clockIn: requestedClockIn ?? requestedClockOut!,
+            clockOut: requestedClockOut ?? null,
+            notes: [
+              "Created via approved shift correction request.",
+              reason ? `Reason: ${reason}` : null,
+            ]
+              .filter(Boolean)
+              .join(" "),
+          },
+        });
+      }
+    }
+
+    // 2) Adjust an existing shift (all non-NEW types)
+    if (type !== "NEW_SHIFT" && shiftId) {
+      const updateData: any = {};
+
+      if (requestedClockIn) {
+        updateData.clockIn = requestedClockIn;
+      }
+
+      if (requestedClockOut) {
+        updateData.clockOut = requestedClockOut;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        const baseNotes = correction.shift?.notes ?? "";
+        const tag = "Adjusted via approved correction request.";
+        const reasonText = reason ? `Reason: ${reason}` : null;
+
+        updateData.notes = [baseNotes, tag, reasonText]
+          .filter((s) => s && s.trim().length > 0)
+          .join(" ");
+
+        updatedShift = await prismaAny.shift.update({
+          where: { id: shiftId },
+          data: updateData,
+        });
+      }
+    }
+  }
+
+  // Finally, update the request status itself
   await prismaAny.shiftCorrectionRequest.update({
     where: { id },
     data: { status },
   });
 
-  // If you later want to actually patch the underlying Shift, do it here.
+  // Revalidate the Exceptions page so UI updates
   revalidatePath("/admin/exceptions");
 }
 
