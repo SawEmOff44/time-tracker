@@ -7,7 +7,7 @@ type RouteParams = {
 };
 
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const handle = params.userId; // from /api/worker/[userId]
+  const handle = params.userId; // e.g. "KYLE" or a Prisma id
 
   if (!handle) {
     return NextResponse.json(
@@ -16,28 +16,28 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     );
   }
 
-  // Decide whether this is a real DB id or an employeeCode
-  // (your Prisma model has both as unique).
-  const where: { id?: string; employeeCode?: string } = {};
-  if (handle.startsWith("cm") && handle.length > 20) {
-    // looks like a Prisma id
-    where.id = handle;
-  } else {
-    // human-friendly code like "KYLE"
-    where.employeeCode = handle;
-  }
-
   try {
-    const user = await prisma.user.findUnique({
-      where,
-      include: {
-        shifts: {
-          orderBy: { clockIn: "desc" },
-          take: 50,
-          include: { location: true },
-        },
+    // Decide how to look this worker up:
+    // - If it looks like a Prisma id (starts with "cm" and long), use `id`
+    // - Otherwise treat it as an employeeCode like "KYLE"
+    const include = {
+      shifts: {
+        orderBy: { clockIn: "desc" },
+        take: 50,
+        include: { location: true },
       },
-    });
+    } as const;
+
+    let user =
+      handle.startsWith("cm") && handle.length > 20
+        ? await prisma.user.findUnique({
+            where: { id: handle },
+            include,
+          })
+        : await prisma.user.findUnique({
+            where: { employeeCode: handle },
+            include,
+          });
 
     if (!user) {
       return NextResponse.json(
@@ -71,7 +71,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
         id: user.id,
         name: user.name,
         employeeCode: user.employeeCode,
-        // contact fields for future UI wiring
+        // contact fields for later UI
         email: user.email,
         phone: user.phone,
         addressLine1: user.addressLine1,
