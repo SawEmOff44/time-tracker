@@ -9,6 +9,8 @@ const navItems = [
   { href: "/admin/locations", label: "Locations" },
   { href: "/admin/shifts", label: "Shifts" },
   { href: "/admin/payroll", label: "Payroll" },
+  { href: "/admin/exceptions", label: "Exceptions" },
+  { href: "/admin/flagged-shifts", label: "Flagged Shifts" },
 ];
 
 export default function AdminNavList() {

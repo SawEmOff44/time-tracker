@@ -56,6 +56,11 @@ model EmployeeDocument {
   createdAt       DateTime @default(now())
 }
 
+enum GeofencePolicy {
+  STRICT  // Reject clock if outside radius
+  WARN    // Allow clock but flag for admin review
+}
+
 model Location {
   id           String  @id @default(cuid())
   name         String
@@ -64,6 +69,11 @@ model Location {
   lng          Float
   radiusMeters Float
   active       Boolean @default(true)
+
+  // Geofence policy fields
+  geofenceRadiusMeters Int             @default(60)
+  clockInGraceSeconds  Int             @default(120)
+  policy               GeofencePolicy  @default(STRICT)
 
   shifts       Shift[]
   defaultUsers User[]  @relation("UserDefaultLocation")

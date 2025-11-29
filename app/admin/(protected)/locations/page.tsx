@@ -20,6 +20,9 @@ type Location = {
   lng: number;
   radiusMeters: number | null;
   active: boolean;
+  geofenceRadiusMeters?: number;
+  clockInGraceSeconds?: number;
+  policy?: "STRICT" | "WARN";
 };
 
 type GeocodeResponse =
@@ -42,6 +45,10 @@ export default function LocationsAdminPage() {
   const [lng, setLng] = useState<number | null>(null);
   const [radiusMeters, setRadiusMeters] = useState<number | null>(null);
   const [active, setActive] = useState(true);
+
+  const [geofenceRadiusMeters, setGeofenceRadiusMeters] = useState<number>(60);
+  const [clockInGraceSeconds, setClockInGraceSeconds] = useState<number>(120);
+  const [policy, setPolicy] = useState<"STRICT" | "WARN">("STRICT");
 
   const [addressQuery, setAddressQuery] = useState("");
   const [geocodeLoading, setGeocodeLoading] = useState(false);
@@ -80,6 +87,9 @@ export default function LocationsAdminPage() {
     setLng(null);
     setRadiusMeters(null);
     setActive(true);
+    setGeofenceRadiusMeters(60);
+    setClockInGraceSeconds(120);
+    setPolicy("STRICT");
     setAddressQuery("");
     setGeocodeError(null);
   }
@@ -92,6 +102,9 @@ export default function LocationsAdminPage() {
     setLng(location.lng);
     setRadiusMeters(location.radiusMeters);
     setActive(location.active);
+    setGeofenceRadiusMeters(location.geofenceRadiusMeters ?? 60);
+    setClockInGraceSeconds(location.clockInGraceSeconds ?? 120);
+    setPolicy(location.policy ?? "STRICT");
     setAddressQuery("");
     setGeocodeError(null);
   }
@@ -126,6 +139,9 @@ export default function LocationsAdminPage() {
         lng,
         radiusMeters: radiusMeters ?? 0,
         active,
+        geofenceRadiusMeters,
+        clockInGraceSeconds,
+        policy,
       };
 
       if (editingId) {
@@ -349,6 +365,52 @@ export default function LocationsAdminPage() {
                 Set to <strong>0</strong> to mark this as an ADHOC bucket
                 (no GPS radius check).
               </p>
+            </div>
+
+            {/* Geofence Policy Controls */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 border-t border-slate-700 pt-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-200">
+                  Geofence Radius (m)
+                </label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                  value={geofenceRadiusMeters}
+                  onChange={(e) => setGeofenceRadiusMeters(Number(e.target.value) || 60)}
+                  min={0}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Clock-in/out distance check</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-200">
+                  Grace Period (sec)
+                </label>
+                <input
+                  type="number"
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                  value={clockInGraceSeconds}
+                  onChange={(e) => setClockInGraceSeconds(Number(e.target.value) || 120)}
+                  min={0}
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Allow clock-in X sec early/late</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-200">
+                  Policy
+                </label>
+                <select
+                  className="mt-1 w-full rounded-md border border-gray-300 px-2 py-1.5 text-sm shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
+                  value={policy}
+                  onChange={(e) => setPolicy(e.target.value as "STRICT" | "WARN")}
+                >
+                  <option value="STRICT">Strict (reject)</option>
+                  <option value="WARN">Warn (allow + flag)</option>
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">Geofence violation behavior</p>
+              </div>
             </div>
 
             <div className="flex items-center gap-2">

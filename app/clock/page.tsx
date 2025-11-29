@@ -16,6 +16,10 @@ type ClockLocation = {
   name: string;
   code: string;
   radiusMeters: number;
+  lat: number;
+  lng: number;
+  geofenceRadiusMeters?: number;
+  policy?: string;
 };
 
 function formatDuration(totalSeconds: number): string {
@@ -54,6 +58,11 @@ export default function ClockPage() {
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [selectedLocationId, setSelectedLocationId] = useState<string>("");
+  const [proximityInfo, setProximityInfo] = useState<{
+    distance: number;
+    allowed: boolean;
+    policy: string;
+  } | null>(null);
 
   // --- Load locations for dropdown ----------------------------------------
   useEffect(() => {
@@ -85,6 +94,41 @@ export default function ClockPage() {
 
     void loadLocations();
   }, []);
+
+  // --- Calculate proximity when location or GPS changes --------------------
+  useEffect(() => {
+    if (!selectedLocationId || selectedLocationId === "ADHOC" || !lat || !lng) {
+      setProximityInfo(null);
+      return;
+    }
+
+    const selected = locations.find((loc) => loc.id === selectedLocationId);
+    if (!selected || !selected.lat || !selected.lng) {
+      setProximityInfo(null);
+      return;
+    }
+
+    // Calculate distance using Haversine formula
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const R = 6371000; // Earth radius in meters
+    const dLat = toRad(selected.lat - lat);
+    const dLng = toRad(selected.lng - lng);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRad(lat)) *
+        Math.cos(toRad(selected.lat)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = R * c;
+
+    const geofenceRadius = selected.geofenceRadiusMeters ?? selected.radiusMeters;
+    const tolerance = 20; // Base GPS tolerance
+    const policy = selected.policy ?? "STRICT";
+    const allowed = distance <= geofenceRadius + tolerance;
+
+    setProximityInfo({ distance, allowed, policy });
+  }, [selectedLocationId, lat, lng, locations]);
 
   // --- Grab GPS once when the page loads -----------------------------------
   useEffect(() => {
@@ -288,6 +332,36 @@ export default function ClockPage() {
           )}
           {locationsError && (
             <p className="mt-1 text-[11px] text-red-300">{locationsError}</p>
+          )}
+          {proximityInfo && (
+            <div
+              className={`mt-2 p-3 rounded-lg border ${
+                proximityInfo.allowed
+                  ? "bg-emerald-500/10 border-emerald-500/40 text-emerald-200"
+                  : proximityInfo.policy === "WARN"
+                  ? "bg-amber-500/10 border-amber-500/40 text-amber-200"
+                  : "bg-red-500/10 border-red-500/40 text-red-200"
+              }`}
+            >
+              <p className="text-xs font-medium">
+                {proximityInfo.allowed ? (
+                  <>
+                    ✓ You are {Math.round(proximityInfo.distance)}m from this site.
+                    Within allowed range.
+                  </>
+                ) : proximityInfo.policy === "WARN" ? (
+                  <>
+                    ⚠️ You are {Math.round(proximityInfo.distance)}m from this site.
+                    You can clock in, but this will be flagged for admin review.
+                  </>
+                ) : (
+                  <>
+                    ✗ You are {Math.round(proximityInfo.distance)}m from this site.
+                    You must be closer to clock in.
+                  </>
+                )}
+              </p>
+            </div>
           )}
         </div>
 

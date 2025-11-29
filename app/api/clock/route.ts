@@ -87,6 +87,17 @@ export async function POST(req: NextRequest) {
     if (!adhoc && locationId) {
       resolvedLocation = await prisma.location.findUnique({
         where: { id: locationId },
+        select: {
+          id: true,
+          name: true,
+          active: true,
+          lat: true,
+          lng: true,
+          radiusMeters: true,
+          geofenceRadiusMeters: true,
+          clockInGraceSeconds: true,
+          policy: true,
+        },
       });
 
       if (!resolvedLocation || !resolvedLocation.active) {
@@ -172,23 +183,75 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: baseError }, { status: 400 });
         }
 
+        // Use per-location geofence policy if available
+        const geofenceRadius = (resolvedLocation as any).geofenceRadiusMeters ?? resolvedLocation.radiusMeters;
+        const policy = (resolvedLocation as any).policy ?? "STRICT";
         const distance = distanceInMeters(lat, lng, resolvedLocation.lat, resolvedLocation.lng);
-
-        const allowed = distance <= (resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE);
+        const allowed = distance <= (geofenceRadius + CLOCKIN_TOLERANCE);
 
         if (!allowed) {
           // Log diagnostic info to server logs to help debug failures.
-          console.warn("Clock-in GPS rejected", {
+          console.warn("Clock-in GPS outside geofence", {
             employeeCode,
             provided: { lat, lng },
             site: { lat: resolvedLocation.lat, lng: resolvedLocation.lng },
-            radius: resolvedLocation.radiusMeters,
+            geofenceRadius,
             distance,
-            allowedRadius: resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE,
+            allowedRadius: geofenceRadius + CLOCKIN_TOLERANCE,
+            policy,
           });
 
+          if (policy === "WARN") {
+            // WARN policy: allow clock-in but flag for admin review
+            const created = await prisma.shift.create({
+              data: {
+                userId: user.id,
+                locationId: resolvedLocationId,
+                clockIn: now,
+                clockInLat: lat,
+                clockInLng: lng,
+                notes: `⚠️ Clock-in outside geofence (${Math.round(distance)}m from site, allowed ${geofenceRadius + CLOCKIN_TOLERANCE}m). Flagged for admin review.`,
+              },
+              include: { location: true },
+            });
+
+            status = "clocked_in";
+            message = `⚠️ Clocked in at ${created.location?.name ?? "job site"}. You are ${Math.round(distance)}m from the site center. This shift is flagged for review.`;
+            locationName = created.location?.name ?? locationName;
+
+            // Continue to clock-in success with warning
+            const weekStart = startOfWeek(now);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            weekEnd.setHours(23, 59, 59, 999);
+
+            const weekShifts = await prisma.shift.findMany({
+              where: {
+                userId: user.id,
+                clockIn: { gte: weekStart, lte: weekEnd },
+                clockOut: { not: null },
+              },
+            });
+
+            const totalHoursThisPeriod = weekShifts.reduce((sum, s) => {
+              if (!s.clockOut) return sum;
+              const hours =
+                (s.clockOut.getTime() - s.clockIn.getTime()) / (1000 * 60 * 60);
+              return sum + hours;
+            }, 0);
+
+            return NextResponse.json({
+              status,
+              message,
+              locationName,
+              totalHoursThisPeriod,
+              warning: true,
+            });
+          }
+
+          // STRICT policy: reject clock-in
           const baseError =
-            "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.";
+            `You are ${Math.round(distance)}m from ${locationName}. You must be within ${geofenceRadius + CLOCKIN_TOLERANCE}m to clock in. If you are working at an unlisted location, choose 'Other (ADHOC)'.`;
 
           // Only include diagnostics in non-production to avoid leaking coords.
           if (process.env.NODE_ENV !== "production") {
@@ -197,8 +260,8 @@ export async function POST(req: NextRequest) {
                 error: baseError,
                 details: {
                   distance: Math.round(distance),
-                  radius: resolvedLocation.radiusMeters,
-                  allowedRadius: Math.round(resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE),
+                  geofenceRadius,
+                  allowedRadius: Math.round(geofenceRadius + CLOCKIN_TOLERANCE),
                   providedLat: lat,
                   providedLng: lng,
                 },
@@ -238,20 +301,25 @@ export async function POST(req: NextRequest) {
       // radius-only check. Strategy:
       // - If the shift or selected location is ADHOC, skip GPS enforcement.
       // - If the location has a positive radius, try the following in order:
-      //   1) If client provided current lat/lng, allow if inside radius.
-      //   2) If client provided lat/lng and it's slightly outside radius,
+      //   1) If client provided current lat/lng, allow if inside geofence.
+      //   2) If client provided lat/lng and it's slightly outside geofence,
       //      allow within a small tolerance (e.g. 100m).
       //   3) If client provided lat/lng but outside tolerance, allow if
       //      the current coords are near the original clock-in coordinates.
       //   4) If client did not provide coords, fall back to the original
-      //      clock-in coordinates: allow if those were within radius + tol.
+      //      clock-in coordinates: allow if those were within geofence + tol.
       //   5) Otherwise, reject and ask for location services.
 
       const TOLERANCE_METERS = 100;
 
       if (!adhoc) {
         const site = resolvedLocation ?? openShift.location ?? null;
-        if (site && site.radiusMeters && site.radiusMeters > 0) {
+        const geofenceRadius = site && (site as any).geofenceRadiusMeters 
+          ? (site as any).geofenceRadiusMeters 
+          : site?.radiusMeters ?? 0;
+        const policy = site && (site as any).policy ? (site as any).policy : "STRICT";
+
+        if (site && geofenceRadius > 0) {
           // Helper to reject with consistent message.
           const rejectOutOfRange = () =>
             NextResponse.json(
@@ -263,12 +331,13 @@ export async function POST(req: NextRequest) {
             );
 
           let allowed = false;
+          let outsideDistance: number | null = null;
 
           if (lat != null && lng != null) {
               const distToSite = distanceInMeters(lat, lng, site.lat, site.lng);
-            if (distToSite <= site.radiusMeters) {
+            if (distToSite <= geofenceRadius) {
               allowed = true;
-            } else if (distToSite <= site.radiusMeters + TOLERANCE_METERS) {
+            } else if (distToSite <= geofenceRadius + TOLERANCE_METERS) {
               // Slightly outside — accept as OK
               allowed = true;
             } else if (
@@ -283,7 +352,11 @@ export async function POST(req: NextRequest) {
               );
               if (distToClockIn <= TOLERANCE_METERS) {
                 allowed = true;
+              } else {
+                outsideDistance = distToSite;
               }
+            } else {
+              outsideDistance = distToSite;
             }
           } else {
             // No current coords — fall back to clock-in coords if present
@@ -297,35 +370,57 @@ export async function POST(req: NextRequest) {
                 site.lat,
                 site.lng
               );
-              if (distClockInToSite <= site.radiusMeters + TOLERANCE_METERS) {
+              if (distClockInToSite <= geofenceRadius + TOLERANCE_METERS) {
                 allowed = true;
               }
             }
           }
 
           if (!allowed) {
-            return rejectOutOfRange();
+            if (policy === "WARN" && outsideDistance !== null) {
+              // WARN policy: allow clock-out but flag for review
+              const updated = await prisma.shift.update({
+                where: { id: openShift.id },
+                data: {
+                  clockOut: now,
+                  clockOutLat: lat,
+                  clockOutLng: lng,
+                  notes: openShift.notes 
+                    ? `${openShift.notes}\n⚠️ Clock-out outside geofence (${Math.round(outsideDistance)}m from site, allowed ${geofenceRadius + TOLERANCE_METERS}m). Flagged for admin review.`
+                    : `⚠️ Clock-out outside geofence (${Math.round(outsideDistance)}m from site, allowed ${geofenceRadius + TOLERANCE_METERS}m). Flagged for admin review.`,
+                },
+                include: { location: true },
+              });
+
+              status = "clocked_out";
+              locationName = updated.location?.name ?? locationName;
+              message = `⚠️ Clocked out${locationName ? ` from ${locationName}` : ""}. You are ${Math.round(outsideDistance)}m from the site center. This shift is flagged for review.`;
+            } else {
+              return rejectOutOfRange();
+            }
           }
         }
       }
 
-      const updated = await prisma.shift.update({
-        where: { id: openShift.id },
-        data: {
-          clockOut: now,
-          clockOutLat: lat,
-          clockOutLng: lng,
-        },
-        include: { location: true },
-      });
+      // Only perform this update if we haven't already updated in the WARN policy branch
+      if (status !== "clocked_out") {
+        const updated = await prisma.shift.update({
+          where: { id: openShift.id },
+          data: {
+            clockOut: now,
+            clockOutLat: lat,
+            clockOutLng: lng,
+          },
+          include: { location: true },
+        });
 
-      status = "clocked_out";
-      locationName = updated.location?.name ?? locationName;
+        status = "clocked_out";
+        locationName = updated.location?.name ?? locationName;
 
-      message = `Clocked out${
-        locationName ? ` from ${locationName}` : ""
-      }. Shift recorded.`;
-    }
+        message = `Clocked out${
+          locationName ? ` from ${locationName}` : ""
+        }. Shift recorded.`;
+      }
 
     // Compute total hours this current Mon–Sat week for this worker
     const weekStart = startOfWeek(now);

@@ -32,6 +32,9 @@ export async function GET() {
       radiusMeters: loc.radiusMeters,
       active: loc.active,
       adhoc: loc.radiusMeters === 0,
+      geofenceRadiusMeters: (loc as any).geofenceRadiusMeters ?? 60,
+      clockInGraceSeconds: (loc as any).clockInGraceSeconds ?? 120,
+      policy: (loc as any).policy ?? "STRICT",
       createdAt: loc.createdAt.toISOString(),
     }));
 
@@ -61,7 +64,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { name, code, lat, lng, radiusMeters, active } = body;
+    const { name, code, lat, lng, radiusMeters, active, geofenceRadiusMeters, clockInGraceSeconds, policy } = body;
 
     const trimmedName = typeof name === "string" ? name.trim() : "";
     const trimmedCode = typeof code === "string" ? code.trim() : "";
@@ -95,7 +98,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const loc = await prisma.location.create({
+    const loc = await (prisma.location as any).create({
       data: {
         name: trimmedName,
         code: trimmedCode,
@@ -103,6 +106,9 @@ export async function POST(req: NextRequest) {
         lng: parsedLng,
         radiusMeters: parsedRadius,
         active: active ?? true,
+        geofenceRadiusMeters: geofenceRadiusMeters ?? 60,
+        clockInGraceSeconds: clockInGraceSeconds ?? 120,
+        policy: policy ?? "STRICT",
       },
     });
 
