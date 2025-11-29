@@ -8,6 +8,8 @@ type JobSiteRow = {
   locationName: string | null;
   totalHours: number;
   totalWages: number;
+  // kept for UI compatibility
+  totalCost?: number;
   shiftCount: number;
   workerCount: number;
 };
@@ -131,6 +133,7 @@ export async function GET(req: NextRequest) {
         locationName: r.locationName,
         totalHours: Number(r.totalHours.toFixed(2)),
         totalWages: Number(r.totalWages.toFixed(2)),
+        totalCost: Number(r.totalWages.toFixed(2)),
         shiftCount: r.shiftCount,
         workerCount: r.workerIds.size,
       }))

@@ -5,10 +5,10 @@ import { useEffect, useState, useRef } from "react";
 
 type JobSiteRow = {
   locationId: string | null;
-  locationName: string;
+  locationName: string | null;
   totalHours: number;
   totalCost: number;
-  distinctWorkers: number;
+  workerCount: number;
   shiftCount: number;
 };
 
@@ -180,14 +180,14 @@ export default function AdminAnalyticsPage() {
 
   const summaryTotalLocations = data?.totalLocations ?? new Set(rows.map((r) => r.locationId ?? r.locationName)).size;
 
-  const summaryTotalWorkers = data?.totalWorkers ?? rows.reduce((sum, r) => sum + (r.distinctWorkers || 0), 0);
+  const summaryTotalWorkers = data?.totalWorkers ?? rows.reduce((sum, r) => sum + (r.workerCount || 0), 0);
 
   // Prepare pie data for top locations
   const pieData = filteredRows
     .slice()
     .sort((a, b) => b.totalHours - a.totalHours)
     .slice(0, 8)
-    .map((r) => ({ name: r.locationName, value: Number(r.totalHours.toFixed(2)) }));
+    .map((r) => ({ name: r.locationName ?? "Unknown", value: Number(r.totalHours.toFixed(2)) }));
 
   const COLORS = ["#F59E0B", "#10B981", "#60A5FA", "#A78BFA", "#F97316", "#EF4444", "#14B8A6", "#FBBF24"];
 
@@ -243,7 +243,7 @@ export default function AdminAnalyticsPage() {
 
           <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Total labor cost</div>
-            <div className="mt-1 text-xl font-semibold text-emerald-300">${summaryTotalCost.toFixed(2)}</div>
+            <div className="mt-1 text-xl font-semibold text-emerald-300">${(summaryTotalCost ?? 0).toFixed(2)}</div>
           </div>
         </div>
       )}
@@ -332,12 +332,12 @@ export default function AdminAnalyticsPage() {
                 {filteredRows.slice().sort((a,b) => b.totalHours - a.totalHours).map((row) => {
                   const widthPct = maxHours > 0 ? Math.max(4, (row.totalHours / maxHours) * 100) : 0;
                   return (
-                    <tr key={row.locationId ?? row.locationName}>
-                      <td className="px-3 py-2 align-middle text-slate-200">{row.locationName}</td>
-                      <td className="px-3 py-2 align-middle text-slate-200">{row.distinctWorkers}</td>
+                    <tr key={row.locationId ?? row.locationName ?? Math.random().toString(36)}>
+                      <td className="px-3 py-2 align-middle text-slate-200">{row.locationName ?? "Unknown"}</td>
+                      <td className="px-3 py-2 align-middle text-slate-200">{row.workerCount}</td>
                       <td className="px-3 py-2 align-middle text-slate-200">{row.shiftCount}</td>
                       <td className="px-3 py-2 align-middle text-right text-slate-50">{row.totalHours.toFixed(2)}h</td>
-                      <td className="px-3 py-2 align-middle text-right text-emerald-300">${row.totalCost.toFixed(2)}</td>
+                      <td className="px-3 py-2 align-middle text-right text-emerald-300">${(row.totalCost ?? 0).toFixed(2)}</td>
                       <td className="px-3 py-2 align-middle">
                         <div className="w-full max-w-xs">
                           <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
