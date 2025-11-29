@@ -431,7 +431,7 @@ export default function AdminEmployeesPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 max-w-[1200px] mx-auto">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold text-slate-50">Employees</h1>
@@ -644,8 +644,10 @@ export default function AdminEmployeesPage() {
 
       {/* Edit modal */}
       {editingUser && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 p-6 shadow-2xl">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 px-2 sm:px-4">
+          <div
+            className="relative w-full max-w-3xl max-h-[80vh] mx-4 my-4 rounded-2xl bg-slate-900 border border-slate-700 p-6 shadow-2xl flex flex-col overflow-hidden"
+          >
             <h2 className="text-sm font-semibold text-slate-100 mb-1">
               Edit employee
             </h2>
@@ -653,7 +655,7 @@ export default function AdminEmployeesPage() {
               Update contact info, hourly rate, or set a new 4-digit PIN.
             </p>
 
-            <div className="space-y-4">
+            <div className="flex-1 space-y-4 overflow-y-auto pr-1">
               <div>
                 <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-300">
                   Name
@@ -932,7 +934,7 @@ export default function AdminEmployeesPage() {
               )}
             </div>
 
-            <div className="mt-6 flex justify-end gap-3">
+            <div className="shrink-0 mt-4 pt-4 flex justify-end gap-3 border-t border-slate-700 bg-slate-900">
               <button
                 type="button"
                 onClick={closeEdit}

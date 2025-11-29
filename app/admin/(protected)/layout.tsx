@@ -1,22 +1,47 @@
-// app/admin/(protected)/layout.tsx
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import type { ReactNode } from "react";
+// app/admin/layout.tsx
+import Link from "next/link";
 
-export default async function ProtectedAdminLayout({
+export default function AdminLayout({
   children,
 }: {
-  children: ReactNode;
+  children: React.ReactNode;
 }) {
-  // Guard: only allow access if admin_session cookie is present
-  const cookieStore = await cookies();
-  const session = cookieStore.get("admin_session")?.value;
+  return (
+    <>
+      <header className="border-b border-slate-700 bg-slate-900/60 backdrop-blur">
+        <nav>
+          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-6 py-4">
+            {/* Left: Admin label / home */}
+            <div className="flex items-center gap-3">
+              <Link
+                href="/admin"
+                className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
+              >
+                Admin
+              </Link>
+            </div>
 
-  if (!session) {
-    redirect("/admin/login");
-  }
+            {/* Right: quick links */}
+            <div className="flex items-center gap-2">
+              <Link
+                href="/worker"
+                className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
+              >
+                Worker Portal
+              </Link>
+              <Link
+                href="/clock"
+                className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs font-medium text-slate-100 shadow-sm hover:border-amber-400 hover:text-amber-200 hover:shadow-amber-500/20"
+              >
+                Clock In / Out
+              </Link>
+            </div>
+          </div>
+        </nav>
+      </header>
 
-  // IMPORTANT: no extra header/nav/markup here
-  // The visual layout (sidebar, etc.) is handled by app/admin/layout.tsx
-  return <>{children}</>;
+      {/* Give admin pages room to breathe */}
+      <main className="mx-auto max-w-[1600px] px-6 py-6">{children}</main>
+    </>
+  );
 }

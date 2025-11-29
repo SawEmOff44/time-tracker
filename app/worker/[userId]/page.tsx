@@ -449,7 +449,7 @@ export default function WorkerProfilePage() {
               )}
             </section>
 
-            {/* Shifts table (unchanged except wrapped in section) */}
+            {/* Shifts table */}
             <section className="card bg-slate-900/80 border border-slate-700/80">
               <div className="mb-3 flex items-center justify-between gap-4">
                 <h2 className="text-sm font-semibold text-slate-100">
