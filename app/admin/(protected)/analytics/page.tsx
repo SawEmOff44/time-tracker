@@ -2,20 +2,6 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import {
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend,
-} from "recharts";
 
 type JobSiteRow = {
   locationId: string | null;
@@ -63,6 +49,8 @@ export default function AdminAnalyticsPage() {
 
   // series for line chart (hours per day)
   const [series, setSeries] = useState<{ date: string; hours: number }[]>([]);
+  // dynamically loaded chart library to avoid import-time failures in some deploys
+  const [chartLib, setChartLib] = useState<any>(null);
 
   // simple client-side filter by location name
   const [locationFilter, setLocationFilter] = useState("");
@@ -122,6 +110,21 @@ export default function AdminAnalyticsPage() {
       setLoading(false);
     }
   }
+
+  // load Recharts dynamically on the client so import-time errors don't break the page
+  useEffect(() => {
+    let mounted = true;
+    void import("recharts")
+      .then((mod) => {
+        if (mounted) setChartLib(mod);
+      })
+      .catch((err) => {
+        console.error("Failed to load chart library:", err);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // initial load and whenever date range changes
   useEffect(() => {
@@ -253,14 +256,18 @@ export default function AdminAnalyticsPage() {
             <div className="text-xs text-slate-400">Last {series.length} days</div>
           </div>
           <div style={{ height: 220 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={series}>
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="hours" stroke="#F59E0B" strokeWidth={2} dot={{ r: 2 }} />
-              </LineChart>
-            </ResponsiveContainer>
+            {chartLib ? (
+              <chartLib.ResponsiveContainer width="100%" height="100%">
+                <chartLib.LineChart data={series}>
+                  <chartLib.XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <chartLib.YAxis tick={{ fontSize: 11 }} />
+                  <chartLib.Tooltip />
+                  <chartLib.Line type="monotone" dataKey="hours" stroke="#F59E0B" strokeWidth={2} dot={{ r: 2 }} />
+                </chartLib.LineChart>
+              </chartLib.ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400 text-sm">Loading charts…</div>
+            )}
           </div>
         </div>
 
@@ -270,17 +277,21 @@ export default function AdminAnalyticsPage() {
             <div className="text-xs text-slate-400">Top {pieData.length}</div>
           </div>
           <div style={{ height: 220 }} className="flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={{ fontSize: 11 }}>
-                  {pieData.map((entry, idx) => (
-                    <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+            {chartLib ? (
+              <chartLib.ResponsiveContainer width="100%" height="100%">
+                <chartLib.PieChart>
+                  <chartLib.Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={{ fontSize: 11 }}>
+                    {pieData.map((entry: any, idx: number) => (
+                      <chartLib.Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />
+                    ))}
+                  </chartLib.Pie>
+                  <chartLib.Legend wrapperStyle={{ fontSize: 11 }} />
+                  <chartLib.Tooltip />
+                </chartLib.PieChart>
+              </chartLib.ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-full text-slate-400 text-sm">Loading charts…</div>
+            )}
           </div>
         </div>
       </div>
