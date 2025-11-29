@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch, AdminAuthError } from "@/lib/adminFetch";
 
 type Employee = {
   id: string;
@@ -86,8 +87,8 @@ export default function AdminShiftsPage() {
   async function loadEmployeesAndLocations() {
     try {
       const [empRes, locRes] = await Promise.all([
-        fetch("/api/admin/employees"),
-        fetch("/api/locations"),
+        adminFetch("/api/admin/employees"),
+        adminFetch("/api/admin/locations"),
       ]);
       if (!empRes.ok) throw new Error("Failed to load employees");
       if (!locRes.ok) throw new Error("Failed to load locations");
@@ -95,9 +96,13 @@ export default function AdminShiftsPage() {
       const locs = (await locRes.json()) as Location[];
       setEmployees(emps);
       setLocations(locs);
-    } catch (err) {
-      console.error(err);
-      setError("Failed to load employees or locations.");
+    } catch (err: any) {
+      console.error("Error loading employees or locations", err);
+      if (err instanceof AdminAuthError) {
+        setError("Your admin session has expired. Please log in again.");
+      } else {
+        setError("Failed to load employees or locations.");
+      }
     }
   }
 
@@ -117,15 +122,18 @@ export default function AdminShiftsPage() {
         params.set("adhocOnly", "true");
       }
 
-      const url = `/api/shifts${params.toString() ? `?${params.toString()}` : ""}`;
+      const url = `/api/admin/shifts${params.toString() ? `?${params.toString()}` : ""}`;
 
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) throw new Error("Failed to load shifts");
+      const res = await adminFetch(url, { cache: "no-store" });
       const data = (await res.json()) as Shift[];
       setShifts(data);
-    } catch (err) {
-      console.error(err);
-      setError("Failed to load shifts.");
+    } catch (err: any) {
+      console.error("Error loading shifts", err);
+      if (err instanceof AdminAuthError) {
+        setError("Your admin session has expired. Please log in again.");
+      } else {
+        setError("Failed to load shifts.");
+      }
     } finally {
       setLoading(false);
     }
@@ -315,8 +323,19 @@ export default function AdminShiftsPage() {
       </div>
 
       {error && (
-        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <span>{error}</span>
+          {error.toLowerCase().includes("session") && (
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = "/admin/login";
+              }}
+              className="rounded-full bg-amber-400 px-3 py-1 text-xs font-semibold text-slate-950 hover:bg-amber-300"
+            >
+              Log in again
+            </button>
+          )}
         </div>
       )}
 

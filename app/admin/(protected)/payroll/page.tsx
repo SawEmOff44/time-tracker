@@ -87,6 +87,63 @@ export default function AdminPayrollPage() {
 
   const rows = data?.rows ?? [];
 
+  // CSV Export handler
+  function handleExportCsv() {
+    if (!data || !data.rows || data.rows.length === 0) {
+      if (typeof window !== "undefined") {
+        window.alert("No payroll data to export for this range.");
+      }
+      return;
+    }
+
+    const header = [
+      "Date",
+      "Location",
+      "Employee",
+      "Employee Code",
+      "Total Hours",
+      "Hourly Rate",
+      "Labor Cost",
+    ];
+
+    const lines: string[] = [];
+    lines.push(header.join(","));
+
+    for (const row of data.rows) {
+      const values = [
+        row.date,
+        row.locationName,
+        row.userName,
+        row.employeeCode ?? "",
+        row.totalHours.toFixed(2),
+        row.hourlyRate != null ? row.hourlyRate.toFixed(2) : "",
+        row.laborCost != null ? row.laborCost.toFixed(2) : "",
+      ];
+
+      const escaped = values.map((v) => {
+        const needsQuotes = v.includes(",") || v.includes("\"") || v.includes("\n");
+        const safe = v.replace(/\"/g, '""');
+        return needsQuotes ? `"${safe}"` : safe;
+      });
+
+      lines.push(escaped.join(","));
+    }
+
+    const csvContent = lines.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const filename = `payroll_${startDate}_to_${endDate}.csv`;
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   // Group rows by location name
   const groupedByLocation: Record<string, PayrollRow[]> = {};
   for (const row of rows) {
@@ -143,6 +200,14 @@ export default function AdminPayrollPage() {
             className="h-9 rounded-full bg-amber-400 px-4 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
           >
             {loading ? "Loading…" : "Refresh"}
+          </button>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={loading || !data || !data.rows || data.rows.length === 0}
+            className="h-9 rounded-full border border-slate-600 px-4 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-60"
+          >
+            Export CSV
           </button>
         </form>
       </div>

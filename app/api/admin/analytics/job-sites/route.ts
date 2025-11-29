@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 type JobSiteRow = {
   locationId: string | null;
   locationName: string | null;
@@ -45,7 +47,7 @@ function getCurrentPayPeriod(today = new Date()) {
 
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
+    const searchParams = req.nextUrl.searchParams;
     const startStr = searchParams.get("start");
     const endStr = searchParams.get("end");
 

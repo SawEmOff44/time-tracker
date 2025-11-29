@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
+import { adminFetch, AdminAuthError } from "../../_utils/adminFetch";
 
 // IMPORTANT: dynamic import to avoid SSR breakage
 const LocationMap = dynamic(() => import("./LocationMap"), {
@@ -51,21 +52,24 @@ export default function LocationsAdminPage() {
     async function loadLocations() {
       try {
         setLoading(true);
-        const res = await fetch("/api/admin/locations");
-        if (!res.ok) {
-          throw new Error("Failed to load locations");
-        }
+        setError(null);
+
+        const res = await adminFetch("/api/admin/locations");
         const data = (await res.json()) as Location[];
         setLocations(data);
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
-        setError("Failed to load locations.");
+        if (err instanceof AdminAuthError) {
+          setError("Your admin session has expired. Please log in again.");
+        } else {
+          setError("Failed to load locations.");
+        }
       } finally {
         setLoading(false);
       }
     }
 
-    loadLocations();
+    void loadLocations();
   }, []);
 
   function resetForm() {
@@ -126,16 +130,11 @@ export default function LocationsAdminPage() {
 
       if (editingId) {
         // UPDATE
-        const res = await fetch(`/api/admin/locations/${editingId}`, {
+        const res = await adminFetch(`/api/admin/locations/${editingId}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || "Failed to update location.");
-        }
 
         const updated = (await res.json()) as Location;
         setLocations((prev) =>
@@ -143,16 +142,11 @@ export default function LocationsAdminPage() {
         );
       } else {
         // CREATE
-        const res = await fetch("/api/admin/locations", {
+        const res = await adminFetch("/api/admin/locations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || "Failed to create location.");
-        }
 
         const created = (await res.json()) as Location;
         setLocations((prev) => [...prev, created]);
@@ -161,7 +155,11 @@ export default function LocationsAdminPage() {
       resetForm();
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Error saving location.");
+      if (err instanceof AdminAuthError) {
+        setError("Your admin session has expired. Please log in again.");
+      } else {
+        setError(err.message || "Error saving location.");
+      }
     } finally {
       setSaving(false);
     }
@@ -171,14 +169,10 @@ export default function LocationsAdminPage() {
     if (!confirm("Delete this location? This cannot be undone.")) return;
 
     try {
-      const res = await fetch(`/api/admin/locations/${id}`, {
+      setError(null);
+      await adminFetch(`/api/admin/locations/${id}`, {
         method: "DELETE",
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to delete location.");
-      }
 
       setLocations((prev) => prev.filter((loc) => loc.id !== id));
 
@@ -188,7 +182,11 @@ export default function LocationsAdminPage() {
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || "Error deleting location.");
+      if (err instanceof AdminAuthError) {
+        setError("Your admin session has expired. Please log in again.");
+      } else {
+        setError(err.message || "Error deleting location.");
+      }
     }
   }
 
@@ -204,7 +202,7 @@ export default function LocationsAdminPage() {
 
     try {
       setGeocodeLoading(true);
-      const res = await fetch("/api/admin/locations/geocode", {
+      const res = await adminFetch("/api/admin/locations/geocode", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
@@ -212,17 +210,19 @@ export default function LocationsAdminPage() {
 
       const data = (await res.json()) as GeocodeResponse;
 
-      if (!res.ok || "error" in data) {
-        throw new Error(
-          (data as any).error || "Geocoding failed for that address."
-        );
+      if ("error" in data) {
+        throw new Error(data.error || "Geocoding failed for that address.");
       }
 
       setLat(data.lat);
       setLng(data.lng);
     } catch (err: any) {
       console.error(err);
-      setGeocodeError(err.message || "Could not find coordinates.");
+      if (err instanceof AdminAuthError) {
+        setGeocodeError("Your admin session has expired. Please log in again.");
+      } else {
+        setGeocodeError(err.message || "Could not find coordinates.");
+      }
     } finally {
       setGeocodeLoading(false);
     }
@@ -243,8 +243,18 @@ export default function LocationsAdminPage() {
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-          {error}
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="flex items-start justify-between gap-3">
+            <p>{error}</p>
+            {error.toLowerCase().includes("session") && (
+              <a
+                href="/admin/login"
+                className="text-xs font-semibold text-red-200 underline underline-offset-2 hover:text-red-100"
+              >
+                Log in again
+              </a>
+            )}
+          </div>
         </div>
       )}
 
@@ -413,7 +423,7 @@ export default function LocationsAdminPage() {
             </form>
 
             {geocodeError && (
-              <p className="mt-1 text-xs text-red-600">{geocodeError}</p>
+              <p className="mt-1 text-xs text-red-300">{geocodeError}</p>
             )}
           </div>
         </div>
@@ -434,13 +444,13 @@ export default function LocationsAdminPage() {
 
           <div className="h-80 w-full">
             <LocationMap
-  lat={lat}
-  lng={lng}
-  radiusMeters={radiusMeters}
-  onChangeCoords={({ lat, lng }: { lat: number; lng: number }) => {
-    setLat(lat);
-    setLng(lng);
-  }}
+              lat={mapLat}
+              lng={mapLng}
+              radiusMeters={radiusMeters}
+              onChangeCoords={({ lat, lng }: { lat: number; lng: number }) => {
+                setLat(lat);
+                setLng(lng);
+              }}
             />
           </div>
         </div>
@@ -520,7 +530,7 @@ export default function LocationsAdminPage() {
                     <td className="px-4 py-2 align-top text-slate-200 text-xs">
                       {loc.radiusMeters ?? 0} m{" "}
                       {isAdhoc && (
-                        <span className="ml-1 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                        <span className="ml-1 inline-flex rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200 border border-amber-500/40">
                           ADHOC
                         </span>
                       )}
@@ -529,8 +539,8 @@ export default function LocationsAdminPage() {
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
                           loc.active
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-slate-900 text-slate-400"
+                            ? "bg-emerald-500/15 text-emerald-200 border border-emerald-500/40"
+                            : "bg-slate-800/80 text-slate-300 border border-slate-600/60"
                         }`}
                       >
                         {loc.active ? "Active" : "Inactive"}
@@ -545,7 +555,7 @@ export default function LocationsAdminPage() {
                       </button>
                       <button
                         onClick={() => handleDelete(loc.id)}
-                        className="inline-flex items-center rounded-md border border-red-200 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50"
+                        className="inline-flex items-center rounded-md border border-red-200 px-2 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20"
                       >
                         Delete
                       </button>

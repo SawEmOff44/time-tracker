@@ -25,7 +25,8 @@ function toYMD(d: Date) {
 
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
+    // ✅ Use nextUrl instead of new URL(req.url)
+    const searchParams = req.nextUrl.searchParams;
 
     const startParam = searchParams.get("start");
     const endParam = searchParams.get("end");
@@ -132,10 +133,7 @@ export async function GET(req: NextRequest) {
       });
 
     const totalHours = rows.reduce((sum, r) => sum + r.totalHours, 0);
-    const totalCost = rows.reduce(
-      (sum, r) => sum + (r.laborCost ?? 0),
-      0
-    );
+    const totalCost = rows.reduce((sum, r) => sum + (r.laborCost ?? 0), 0);
 
     return NextResponse.json({
       start: start.toISOString(),
