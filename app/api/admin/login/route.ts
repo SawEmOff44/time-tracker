@@ -25,9 +25,10 @@ export async function POST(req: NextRequest) {
   // Set a simple session cookie – you can upgrade this to JWT later.
   res.cookies.set("admin_session", "ok", {
     httpOnly: true,
-    sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 8, // 8 hours
+    maxAge: 60 * 60 * 8,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: process.env.NODE_ENV === "production" ? "lax" : "strict",
   });
 
   return res;
