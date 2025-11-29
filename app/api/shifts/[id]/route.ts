@@ -97,7 +97,12 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json(updated);
+    const payload = {
+      ...updated,
+      adhoc: !updated.location || updated.location.radiusMeters === 0,
+    };
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error updating shift:", err);
     return NextResponse.json(

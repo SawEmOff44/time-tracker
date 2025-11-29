@@ -76,12 +76,17 @@ export async function PATCH(
           select: { id: true, name: true, employeeCode: true },
         },
         location: {
-          select: { id: true, name: true, code: true },
+          select: { id: true, name: true, code: true, radiusMeters: true },
         },
       },
     });
 
-    return NextResponse.json(updated);
+    const payload = {
+      ...updated,
+      adhoc: !updated.location || updated.location.radiusMeters === 0,
+    };
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error updating shift:", err);
     return NextResponse.json(

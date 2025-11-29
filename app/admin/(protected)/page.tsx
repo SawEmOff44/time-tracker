@@ -23,9 +23,12 @@ function formatHours(clockIn: Date | null, clockOut: Date | null) {
   return hours.toFixed(2);
 }
 
-// ADHOC = locations with radiusMeters === 0
+// ADHOC = either a location explicitly marked as ADHOC (radiusMeters === 0)
+// or a shift recorded with no location (locationId null => user selected "Other (ADHOC)").
 function isAdhocShift(shift: { location: { radiusMeters: number | null } | null }) {
-  return !!shift.location && shift.location.radiusMeters === 0;
+  // Treat missing location as ADHOC as well.
+  if (!shift.location) return true;
+  return shift.location.radiusMeters === 0;
 }
 
 export const dynamic = "force-dynamic";
@@ -67,12 +70,16 @@ export default async function AdminDashboardPage() {
         location: true,
       },
     }),
+    // Find shifts this month that are ADHOC. ADHOC can be represented in
+    // two ways: a location record with radiusMeters === 0 (an ADHOC bucket),
+    // or a shift with no `locationId` (user chose "Other (ADHOC)" on clock).
     prisma.shift.findMany({
       where: {
         clockIn: { gte: monthStart },
-        location: {
-          radiusMeters: 0,
-        },
+        OR: [
+          { location: { radiusMeters: 0 } },
+          { locationId: null },
+        ],
       },
       include: {
         user: true,

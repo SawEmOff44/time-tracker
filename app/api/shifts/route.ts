@@ -74,7 +74,13 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.json(shifts);
+    // Add explicit `adhoc` boolean so clients don't need to infer it.
+    const payload = shifts.map((s) => ({
+      ...s,
+      adhoc: !s.location || s.location.radiusMeters === 0,
+    }));
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error fetching shifts:", err);
     return NextResponse.json(
@@ -153,7 +159,12 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json(shift, { status: 201 });
+    const payload = {
+      ...shift,
+      adhoc: !shift.location || shift.location.radiusMeters === 0,
+    };
+
+    return NextResponse.json(payload, { status: 201 });
   } catch (err) {
     console.error("Error creating shift:", err);
     return NextResponse.json(
