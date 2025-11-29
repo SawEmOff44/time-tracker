@@ -95,53 +95,28 @@ export async function POST(req: NextRequest) {
 
     const now = new Date();
 
-    // If not ADHOC, enforce GPS radius check for the chosen location.
+    // Resolve location metadata early, but defer GPS enforcement until
+    // we know whether this request is a clock-in. This avoids requiring
+    // GPS when a user is clocking out (which previously caused false
+    // failures if the client didn't include fresh coordinates).
     let locationName: string | null = null;
     let resolvedLocationId: string | null = null;
+    let resolvedLocation: any | null = null;
 
     if (!adhoc && locationId) {
-      const location = await prisma.location.findUnique({
+      resolvedLocation = await prisma.location.findUnique({
         where: { id: locationId },
       });
 
-      if (!location || !location.active) {
+      if (!resolvedLocation || !resolvedLocation.active) {
         return NextResponse.json(
           { error: "Selected job site is not available." },
           { status: 400 }
         );
       }
 
-      locationName = location.name;
-      resolvedLocationId = location.id;
-
-      if (location.radiusMeters > 0) {
-        if (lat == null || lng == null) {
-          return NextResponse.json(
-            {
-              error:
-                "GPS is required to clock in at this job site. Please enable location services.",
-            },
-            { status: 400 }
-          );
-        }
-
-        const distance = haversineMeters(
-          lat,
-          lng,
-          location.lat,
-          location.lng
-        );
-
-        if (distance > location.radiusMeters) {
-          return NextResponse.json(
-            {
-              error:
-                "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.",
-            },
-            { status: 400 }
-          );
-        }
-      }
+      locationName = resolvedLocation.name;
+      resolvedLocationId = resolvedLocation.id;
     }
 
     // ADHOC selection => no locationId, flagged for review.
@@ -162,6 +137,32 @@ export async function POST(req: NextRequest) {
 
     if (!openShift) {
       // ---- CLOCK IN --------------------------------------------------------
+      // If the chosen location requires GPS, enforce it here so clock-out
+      // requests aren't blocked by GPS validation.
+      if (!adhoc && resolvedLocation && resolvedLocation.radiusMeters > 0) {
+        if (lat == null || lng == null) {
+          return NextResponse.json(
+            {
+              error:
+                "GPS is required to clock in at this job site. Please enable location services.",
+            },
+            { status: 400 }
+          );
+        }
+
+        const distance = haversineMeters(lat, lng, resolvedLocation.lat, resolvedLocation.lng);
+
+        if (distance > resolvedLocation.radiusMeters) {
+          return NextResponse.json(
+            {
+              error:
+                "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.",
+            },
+            { status: 400 }
+          );
+        }
+      }
+
       const created = await prisma.shift.create({
         data: {
           userId: user.id,
