@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import bcrypt from "bcryptjs";
+import { distanceInMeters } from "@/lib/distance";
 
 // Shape of the JSON payload returned to the clock page
 
@@ -12,27 +13,7 @@ type ClockResponse = {
   totalHoursThisPeriod: number | null;
 };
 
-function haversineMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371e3; // meters
-  const toRad = (d: number) => (d * Math.PI) / 180;
-
-  const φ1 = toRad(lat1);
-  const φ2 = toRad(lat2);
-  const Δφ = toRad(lat2 - lat1);
-  const Δλ = toRad(lon2 - lon1);
-
-  const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
-}
+// Use shared distance utility (Haversine) from `lib/distance`.
 
 function startOfWeek(date: Date): Date {
   // Use Monday as start-of-week for weekly hours (boss is Mon–Sat)
@@ -140,6 +121,7 @@ export async function POST(req: NextRequest) {
       // If the chosen location requires GPS, enforce it here so clock-out
       // requests aren't blocked by GPS validation.
       if (!adhoc && resolvedLocation && resolvedLocation.radiusMeters > 0) {
+        const CLOCKIN_TOLERANCE = 50; // meters of GPS noise allowance for clock-in
         if (lat == null || lng == null) {
           return NextResponse.json(
             {
@@ -150,16 +132,82 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        const distance = haversineMeters(lat, lng, resolvedLocation.lat, resolvedLocation.lng);
+        // Simple validation / swap-detection heuristics
+        const providedInvalid = Math.abs(lat) > 90 || Math.abs(lng) > 180;
+        const maybeSwapped = Math.abs(lat) > 90 && Math.abs(lng) <= 90;
+        const siteCoordsInvalid =
+          resolvedLocation &&
+          (Math.abs(resolvedLocation.lat) > 90 || Math.abs(resolvedLocation.lng) > 180);
 
-        if (distance > resolvedLocation.radiusMeters) {
-          return NextResponse.json(
-            {
-              error:
-                "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.",
-            },
-            { status: 400 }
-          );
+        if (providedInvalid || siteCoordsInvalid || maybeSwapped) {
+          console.warn("Clock-in GPS suspicious values", {
+            employeeCode,
+            provided: { lat, lng, providedInvalid, maybeSwapped },
+            site: resolvedLocation
+              ? { lat: resolvedLocation.lat, lng: resolvedLocation.lng, siteCoordsInvalid }
+              : null,
+          });
+
+          const baseError =
+            "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.";
+
+          if (process.env.NODE_ENV !== "production") {
+            return NextResponse.json(
+              {
+                error: baseError,
+                details: {
+                  providedInvalid,
+                  maybeSwapped,
+                  siteCoordsInvalid,
+                  providedLat: lat,
+                  providedLng: lng,
+                  siteLat: resolvedLocation?.lat,
+                  siteLng: resolvedLocation?.lng,
+                },
+              },
+              { status: 400 }
+            );
+          }
+
+          return NextResponse.json({ error: baseError }, { status: 400 });
+        }
+
+        const distance = distanceInMeters(lat, lng, resolvedLocation.lat, resolvedLocation.lng);
+
+        const allowed = distance <= (resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE);
+
+        if (!allowed) {
+          // Log diagnostic info to server logs to help debug failures.
+          console.warn("Clock-in GPS rejected", {
+            employeeCode,
+            provided: { lat, lng },
+            site: { lat: resolvedLocation.lat, lng: resolvedLocation.lng },
+            radius: resolvedLocation.radiusMeters,
+            distance,
+            allowedRadius: resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE,
+          });
+
+          const baseError =
+            "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.";
+
+          // Only include diagnostics in non-production to avoid leaking coords.
+          if (process.env.NODE_ENV !== "production") {
+            return NextResponse.json(
+              {
+                error: baseError,
+                details: {
+                  distance: Math.round(distance),
+                  radius: resolvedLocation.radiusMeters,
+                  allowedRadius: Math.round(resolvedLocation.radiusMeters + CLOCKIN_TOLERANCE),
+                  providedLat: lat,
+                  providedLng: lng,
+                },
+              },
+              { status: 400 }
+            );
+          }
+
+          return NextResponse.json({ error: baseError }, { status: 400 });
         }
       }
 
@@ -186,6 +234,81 @@ export async function POST(req: NextRequest) {
       locationName = created.location?.name ?? locationName;
     } else {
       // ---- CLOCK OUT -------------------------------------------------------
+      // Re-check GPS for clock-out, but be more forgiving than a strict
+      // radius-only check. Strategy:
+      // - If the shift or selected location is ADHOC, skip GPS enforcement.
+      // - If the location has a positive radius, try the following in order:
+      //   1) If client provided current lat/lng, allow if inside radius.
+      //   2) If client provided lat/lng and it's slightly outside radius,
+      //      allow within a small tolerance (e.g. 100m).
+      //   3) If client provided lat/lng but outside tolerance, allow if
+      //      the current coords are near the original clock-in coordinates.
+      //   4) If client did not provide coords, fall back to the original
+      //      clock-in coordinates: allow if those were within radius + tol.
+      //   5) Otherwise, reject and ask for location services.
+
+      const TOLERANCE_METERS = 100;
+
+      if (!adhoc) {
+        const site = resolvedLocation ?? openShift.location ?? null;
+        if (site && site.radiusMeters && site.radiusMeters > 0) {
+          // Helper to reject with consistent message.
+          const rejectOutOfRange = () =>
+            NextResponse.json(
+              {
+                error:
+                  "You are outside the allowed GPS radius for this job site. If you are working at an unlisted location, choose 'Other (ADHOC)'.",
+              },
+              { status: 400 }
+            );
+
+          let allowed = false;
+
+          if (lat != null && lng != null) {
+              const distToSite = distanceInMeters(lat, lng, site.lat, site.lng);
+            if (distToSite <= site.radiusMeters) {
+              allowed = true;
+            } else if (distToSite <= site.radiusMeters + TOLERANCE_METERS) {
+              // Slightly outside — accept as OK
+              allowed = true;
+            } else if (
+              openShift.clockInLat != null &&
+              openShift.clockInLng != null
+            ) {
+              const distToClockIn = distanceInMeters(
+                lat,
+                lng,
+                openShift.clockInLat,
+                openShift.clockInLng
+              );
+              if (distToClockIn <= TOLERANCE_METERS) {
+                allowed = true;
+              }
+            }
+          } else {
+            // No current coords — fall back to clock-in coords if present
+            if (
+              openShift.clockInLat != null &&
+              openShift.clockInLng != null
+            ) {
+              const distClockInToSite = distanceInMeters(
+                openShift.clockInLat,
+                openShift.clockInLng,
+                site.lat,
+                site.lng
+              );
+              if (distClockInToSite <= site.radiusMeters + TOLERANCE_METERS) {
+                allowed = true;
+              }
+            }
+          }
+
+          if (!allowed) {
+            return rejectOutOfRange();
+          }
+        }
+      }
+
       const updated = await prisma.shift.update({
         where: { id: openShift.id },
         data: {
