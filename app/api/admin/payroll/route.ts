@@ -1,81 +1,53 @@
+// app/api/admin/payroll/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-type PayrollLocationBreakdown = {
-  locationId: string | null;
-  locationName: string | null;
-  totalHours: number;
-  totalWages: number;
-};
+export const dynamic = "force-dynamic";
 
-type PayrollDayBreakdown = {
-  date: string; // YYYY-MM-DD
-  weekday: string; // Mon, Tue, ...
-  totalHours: number;
-  totalWages: number;
-  perLocation: PayrollLocationBreakdown[];
-};
-
-type PayrollRow = {
-  userId: string;
-  name: string;
-  employeeCode: string | null;
-  hourlyRate: number | null;
-  totalHours: number;
-  totalWages: number;
-  shiftCount: number;
-  perLocation: PayrollLocationBreakdown[];
-  perDay: PayrollDayBreakdown[];
-};
-
-function parseDateParam(value: string | null): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
+function startOfDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  return x;
 }
 
-function yyyymmdd(d: Date): string {
+function endOfDay(d: Date) {
+  const x = new Date(d);
+  x.setHours(23, 59, 59, 999);
+  return x;
+}
+
+function toYMD(d: Date) {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
-function weekdayShort(d: Date): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
-}
-
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const startStr = searchParams.get("start");
-    const endStr = searchParams.get("end");
-    const userIdFilter = searchParams.get("userId"); // optional (for worker portal later)
 
-    const start = parseDateParam(startStr);
-    const end = parseDateParam(endStr);
+    const startParam = searchParams.get("start");
+    const endParam = searchParams.get("end");
+    const userId = searchParams.get("userId");
+    const locationId = searchParams.get("locationId");
 
-    if (!start || !end) {
-      return NextResponse.json(
-        { error: "start and end query params are required (YYYY-MM-DD)" },
-        { status: 400 }
-      );
-    }
+    // Default range: last 14 days (inclusive)
+    const today = new Date();
+    const defaultEnd = endOfDay(today);
+    const defaultStart = startOfDay(
+      new Date(today.getTime() - 13 * 24 * 60 * 60 * 1000)
+    );
 
-    // Make end exclusive by adding 1 day
-    const endExclusive = new Date(end);
-    endExclusive.setDate(endExclusive.getDate() + 1);
+    const start = startParam ? startOfDay(new Date(startParam)) : defaultStart;
+    const end = endParam ? endOfDay(new Date(endParam)) : defaultEnd;
 
     const shifts = await prisma.shift.findMany({
       where: {
-        clockIn: {
-          gte: start,
-          lt: endExclusive,
-        },
-        ...(userIdFilter ? { userId: userIdFilter } : {}),
-        user: {
-          active: true,
-        },
+        clockIn: { gte: start, lte: end },
+        clockOut: { not: null },
+        ...(userId ? { userId } : {}),
+        ...(locationId ? { locationId } : {}),
       },
       include: {
         user: true,
@@ -86,126 +58,97 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const userMap = new Map<string, PayrollRow>();
-
-    for (const shift of shifts) {
-      if (!shift.clockOut) continue; // ignore open shifts
-
-      const user = shift.user;
-      if (!user) continue;
-
-      const location = shift.location;
-      const hours =
-        (shift.clockOut.getTime() - shift.clockIn.getTime()) / (1000 * 60 * 60);
-      if (hours <= 0) continue;
-
-      const hourlyRate = user.hourlyRate ?? 0;
-      const wages = hourlyRate * hours;
-
-      let row = userMap.get(user.id);
-      if (!row) {
-        row = {
-          userId: user.id,
-          name: user.name,
-          employeeCode: user.employeeCode ?? null,
-          hourlyRate: user.hourlyRate ?? null,
-          totalHours: 0,
-          totalWages: 0,
-          shiftCount: 0,
-          perLocation: [],
-          perDay: [],
-        };
-        userMap.set(user.id, row);
+    type BucketKey = string;
+    const buckets = new Map<
+      BucketKey,
+      {
+        userId: string;
+        userName: string;
+        employeeCode: string | null;
+        locationId: string | null;
+        locationName: string;
+        date: string; // YYYY-MM-DD
+        totalHours: number;
+        hourlyRate: number | null;
       }
+    >();
 
-      row.totalHours += hours;
-      row.totalWages += wages;
-      row.shiftCount += 1;
+    for (const s of shifts) {
+      if (!s.clockIn || !s.clockOut) continue;
 
-      // ---- per-location aggregation ----
-      const locId = location?.id ?? null;
-      const locName = location?.name ?? (location ? "Unnamed job site" : "ADHOC");
+      const ms = s.clockOut.getTime() - s.clockIn.getTime();
+      if (ms <= 0) continue;
 
-      let locRow = row.perLocation.find((l) => l.locationId === locId);
-      if (!locRow) {
-        locRow = {
-          locationId: locId,
-          locationName: locName,
-          totalHours: 0,
-          totalWages: 0,
-        };
-        row.perLocation.push(locRow);
+      const hours = ms / (1000 * 60 * 60);
+      const workDate = toYMD(s.clockIn);
+
+      const locId = s.locationId ?? "ADHOC";
+      const key = `${s.userId}::${locId}::${workDate}`;
+
+      const hourlyRate =
+        (s.user as any).hourlyRate != null ? Number(s.user.hourlyRate) : null;
+
+      const existing = buckets.get(key);
+      if (existing) {
+        existing.totalHours += hours;
+      } else {
+        buckets.set(key, {
+          userId: s.userId,
+          userName: s.user?.name ?? "Unknown",
+          employeeCode: s.user?.employeeCode ?? null,
+          locationId: s.locationId,
+          locationName:
+            s.location?.name ??
+            (s.locationId ? "Unknown location" : "ADHOC job site"),
+          date: workDate,
+          totalHours: hours,
+          hourlyRate,
+        });
       }
-      locRow.totalHours += hours;
-      locRow.totalWages += wages;
-
-      // ---- per-day + per-location-inside-day ----
-      const dayKey = yyyymmdd(shift.clockIn);
-      const dayWeekday = weekdayShort(shift.clockIn);
-
-      let dayRow = row.perDay.find((d) => d.date === dayKey);
-      if (!dayRow) {
-        dayRow = {
-          date: dayKey,
-          weekday: dayWeekday,
-          totalHours: 0,
-          totalWages: 0,
-          perLocation: [],
-        };
-        row.perDay.push(dayRow);
-      }
-
-      dayRow.totalHours += hours;
-      dayRow.totalWages += wages;
-
-      let dayLocRow = dayRow.perLocation.find(
-        (l) => l.locationId === locId
-      );
-      if (!dayLocRow) {
-        dayLocRow = {
-          locationId: locId,
-          locationName: locName,
-          totalHours: 0,
-          totalWages: 0,
-        };
-        dayRow.perLocation.push(dayLocRow);
-      }
-      dayLocRow.totalHours += hours;
-      dayLocRow.totalWages += wages;
     }
 
-    const rows: PayrollRow[] = Array.from(userMap.values()).map((row) => ({
-      ...row,
-      totalHours: Number(row.totalHours.toFixed(2)),
-      totalWages: Number(row.totalWages.toFixed(2)),
-      perLocation: row.perLocation
-        .map((l) => ({
-          ...l,
-          totalHours: Number(l.totalHours.toFixed(2)),
-          totalWages: Number(l.totalWages.toFixed(2)),
-        }))
-        .sort((a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)),
-      perDay: row.perDay
-        .map((d) => ({
-          ...d,
-          totalHours: Number(d.totalHours.toFixed(2)),
-          totalWages: Number(d.totalWages.toFixed(2)),
-          perLocation: d.perLocation
-            .map((l) => ({
-              ...l,
-              totalHours: Number(l.totalHours.toFixed(2)),
-              totalWages: Number(l.totalWages.toFixed(2)),
-            }))
-            .sort((a, b) => (b.totalHours ?? 0) - (a.totalHours ?? 0)),
-        }))
-        .sort((a, b) => a.date.localeCompare(b.date)),
-    }));
+    const rows = Array.from(buckets.values())
+      .map((row) => {
+        const roundedHours = Number(row.totalHours.toFixed(2));
+        const laborCost =
+          row.hourlyRate != null
+            ? Number((roundedHours * row.hourlyRate).toFixed(2))
+            : null;
 
-    return NextResponse.json(rows);
+        return {
+          ...row,
+          totalHours: roundedHours,
+          laborCost,
+        };
+      })
+      .sort((a, b) => {
+        if (a.date === b.date) {
+          if (a.locationName === b.locationName) {
+            return a.userName.localeCompare(b.userName);
+          }
+          return a.locationName.localeCompare(b.locationName);
+        }
+        return a.date.localeCompare(b.date);
+      });
+
+    const totalHours = rows.reduce((sum, r) => sum + r.totalHours, 0);
+    const totalCost = rows.reduce(
+      (sum, r) => sum + (r.laborCost ?? 0),
+      0
+    );
+
+    return NextResponse.json({
+      start: start.toISOString(),
+      end: end.toISOString(),
+      count: rows.length,
+      totalHours: Number(totalHours.toFixed(2)),
+      totalCost: Number(totalCost.toFixed(2)),
+      rows,
+    });
   } catch (err) {
     console.error("Payroll GET error", err);
     return NextResponse.json(
-      { error: "Failed to load payroll data" },
+      { error: "Failed to load payroll data." },
       { status: 500 }
     );
   }
