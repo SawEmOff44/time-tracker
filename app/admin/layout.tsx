@@ -103,24 +103,6 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
       {/* MAIN AREA */}
       <div className="flex-1 flex flex-col">
-        {/* Top bar for mobile */}
-        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 py-3 backdrop-blur md:hidden">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="relative h-7 w-24">
-              <Image
-                src="/rhinehart-logo.jpeg"
-                alt="Rhinehart Co. Logo"
-                fill
-                className="object-contain"
-                priority
-              />
-            </div>
-          </Link>
-          <span className="text-xs font-medium text-slate-300">
-            Admin Panel
-          </span>
-        </header>
-
         {/* Content */}
         <main className="flex-1 p-4 md:p-6 lg:p-8">
           <div className="mx-auto max-w-6xl">{children}</div>
