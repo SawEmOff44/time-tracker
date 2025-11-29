@@ -93,10 +93,13 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json(payload);
-  } catch (err) {
+  } catch (err: any) {
     console.error("Error loading shifts:", err);
     return NextResponse.json(
-      { error: "Failed to load shifts" },
+      {
+        error: "Failed to load shifts",
+        details: err?.message ?? String(err),
+      },
       { status: 500 }
     );
   }
