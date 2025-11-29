@@ -1,98 +1,87 @@
+// app/admin/(protected)/analytics/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type JobSiteRow = {
   locationId: string | null;
-  locationName: string | null;
+  locationName: string;
   totalHours: number;
-  totalWages: number;
+  totalCost: number;
+  distinctWorkers: number;
   shiftCount: number;
-  workerCount: number;
 };
 
-function formatDateInput(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
+type JobSiteAnalyticsResponse = {
+  start: string; // YYYY-MM-DD
+  end: string;   // YYYY-MM-DD
+  rows: JobSiteRow[];
 
-// same Mon–Sat pay period as payroll
-function getCurrentPayPeriod(today = new Date()) {
-  const day = today.getDay(); // 0=Sun..6=Sat
-  const daysSinceMonday = (day + 6) % 7;
-  const start = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate() - daysSinceMonday
-  );
-  const end = new Date(
-    start.getFullYear(),
-    start.getMonth(),
-    start.getDate() + 5
-  );
-  return {
-    startDateStr: formatDateInput(start),
-    endDateStr: formatDateInput(end),
-  };
+  // These may or may not be present depending on the API version;
+  // the UI will fall back to computing them from rows if missing.
+  totalHours?: number;
+  totalCost?: number;
+  totalLocations?: number;
+  totalWorkers?: number;
+};
+
+function getDefaultRange() {
+  const today = new Date();
+  const end = new Date(today);
+  end.setHours(0, 0, 0, 0);
+
+  const start = new Date(end.getTime() - 13 * 24 * 60 * 60 * 1000);
+
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(d.getDate()).padStart(2, "0")}`;
+
+  return { start: fmt(start), end: fmt(end) };
 }
 
 export default function AdminAnalyticsPage() {
-  const { startDateStr, endDateStr } = getCurrentPayPeriod();
+  const defaultRange = getDefaultRange();
 
-  const [startDate, setStartDate] = useState(startDateStr);
-  const [endDate, setEndDate] = useState(endDateStr);
-  const [rows, setRows] = useState<JobSiteRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [startDate, setStartDate] = useState(defaultRange.start);
+  const [endDate, setEndDate] = useState(defaultRange.end);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<JobSiteAnalyticsResponse | null>(null);
 
-  const totalHours = useMemo(
-    () =>
-      rows.reduce((acc, r) => acc + (r.totalHours ?? 0), 0),
-    [rows]
-  );
-  const totalWages = useMemo(
-    () =>
-      rows.reduce((acc, r) => acc + (r.totalWages ?? 0), 0),
-    [rows]
-  );
-
-  function shiftPeriod(offsetWeeks: number) {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
-
-    start.setDate(start.getDate() + offsetWeeks * 7);
-    end.setDate(end.getDate() + offsetWeeks * 7);
-
-    setStartDate(formatDateInput(start));
-    setEndDate(formatDateInput(end));
-  }
+  // simple client-side filter by location name
+  const [locationFilter, setLocationFilter] = useState("");
 
   async function load() {
     try {
       setLoading(true);
       setError(null);
 
-      const params = new URLSearchParams({
-        start: startDate,
-        end: endDate,
-      });
+      const params = new URLSearchParams();
+      if (startDate) params.set("start", startDate);
+      if (endDate) params.set("end", endDate);
 
       const res = await fetch(
-        `/api/admin/analytics/job-sites?${params.toString()}`
+        `/api/admin/analytics/job-sites?${params.toString()}`,
+        {
+          credentials: "include",
+        }
       );
 
       if (!res.ok) {
-        throw new Error("Failed");
+        const body = (await res.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(body?.error ?? "Failed to load job-site analytics.");
       }
 
-      const data = (await res.json()) as JobSiteRow[];
-      setRows(data);
-    } catch (err) {
+      const json = (await res.json()) as JobSiteAnalyticsResponse;
+      setData(json);
+    } catch (err: any) {
       console.error(err);
-      setError("Could not load job-site analytics for this period.");
-      setRows([]);
+      setError(err.message ?? "Failed to load job-site analytics.");
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -103,178 +92,230 @@ export default function AdminAnalyticsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const periodLabel = useMemo(() => {
-    const s = new Date(startDate);
-    const e = new Date(endDate);
-    const fmt = (d: Date) =>
-      d.toLocaleDateString("en-US", {
-        month: "2-digit",
-        day: "2-digit",
-        year: "numeric",
-      });
-    return `${fmt(s)} – ${fmt(e)} (Mon–Sat)`;
-  }, [startDate, endDate]);
+  const rows = data?.rows ?? [];
+
+  const filteredRows = rows.filter((row) => {
+    const term = locationFilter.trim().toLowerCase();
+    if (!term) return true;
+    return row.locationName.toLowerCase().includes(term);
+  });
+
+  const maxHours =
+    filteredRows.length > 0
+      ? Math.max(...filteredRows.map((r) => r.totalHours))
+      : 0;
+
+  // --- Derived summary numbers with fallbacks ------------------------------
+  const summaryTotalHours =
+    data?.totalHours ??
+    rows.reduce((sum, r) => sum + (r.totalHours || 0), 0);
+
+  const summaryTotalCost =
+    data?.totalCost ??
+    rows.reduce((sum, r) => sum + (r.totalCost || 0), 0);
+
+  const summaryTotalLocations =
+    data?.totalLocations ??
+    new Set(rows.map((r) => r.locationId ?? r.locationName)).size;
+
+  const summaryTotalWorkers =
+    data?.totalWorkers ??
+    rows.reduce((sum, r) => sum + (r.distinctWorkers || 0), 0);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-50">Analytics</h1>
-        <p className="mt-1 text-sm text-slate-400">
-          Job-site hours and labor cost for the selected pay period (Monday
-          through Saturday).
-        </p>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-50">
+            Job-Site Analytics
+          </h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Man-hours and labor cost per location. Use this to see where time
+            and payroll are going across your jobs.
+          </p>
+        </div>
+
+        {/* Range picker */}
+        <form
+          className="flex flex-wrap gap-3 items-end"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void load();
+          }}
+        >
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
+              Start date
+            </label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
+              End date
+            </label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="h-9 rounded-full bg-amber-400 px-4 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
+          >
+            {loading ? "Loading…" : "Refresh"}
+          </button>
+        </form>
       </div>
 
-      {/* Filters */}
-      <div className="card bg-slate-900/80 border border-slate-700/80">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Pay period
-            </p>
-            <p className="mt-1 text-sm text-slate-100">{periodLabel}</p>
+      {error && (
+        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {error}
+        </div>
+      )}
+
+      {/* Summary cards */}
+      {data && !error && (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Range
+            </div>
+            <div className="mt-1 text-sm text-slate-100">
+              {startDate} → {endDate}
+            </div>
           </div>
 
-          <div className="flex flex-col gap-3 md:flex-row md:items-end">
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Start (Monday)
-              </label>
-              <input
-                type="date"
-                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Locations with hours
             </div>
-
-            <div className="flex flex-col">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
-                End (Saturday)
-              </label>
-              <input
-                type="date"
-                className="mt-1 w-40 bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
+            <div className="mt-1 text-xl font-semibold text-slate-50">
+              {summaryTotalLocations}
             </div>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => shiftPeriod(-1)}
-              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
-            >
-              ◀ Previous period
-            </button>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Total hours
+            </div>
+            <div className="mt-1 text-xl font-semibold text-amber-300">
+              {summaryTotalHours.toFixed(2)}h
+            </div>
+            <div className="mt-1 text-[11px] text-slate-500">
+              Across {summaryTotalWorkers} workers
+            </div>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => shiftPeriod(1)}
-              className="rounded-full border border-slate-700/70 px-3 py-1.5 text-xs font-medium text-slate-100 hover:bg-slate-800"
-            >
-              Next period ▶
-            </button>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900/80 px-4 py-3">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              Total labor cost
+            </div>
+            <div className="mt-1 text-xl font-semibold text-emerald-300">
+              ${summaryTotalCost.toFixed(2)}
+            </div>
+          </div>
+        </div>
+      )}
 
-            <button
-              type="button"
-              onClick={load}
-              disabled={loading}
-              className="rounded-full bg-amber-400 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-amber-300 disabled:opacity-60"
-            >
-              {loading ? "Loading…" : "Apply"}
-            </button>
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
+            Filter by location
+          </label>
+          <input
+            type="text"
+            value={locationFilter}
+            onChange={(e) => setLocationFilter(e.target.value)}
+            placeholder="e.g. Main Shop, Lake House"
+            className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100"
+          />
+        </div>
+      </div>
+
+      {/* Location table with hours bar */}
+      <div className="card bg-slate-900/80">
+        <div className="mb-3 flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-slate-100">
+            Locations (sorted by hours)
+          </h2>
+          <div className="text-[11px] text-slate-400">
+            {filteredRows.length} locations in view
           </div>
         </div>
 
-        {error && (
-          <p className="mt-3 text-xs text-red-300">
-            {error}
+        {filteredRows.length === 0 && !loading && !error && (
+          <p className="text-sm text-slate-400">
+            No locations with hours in this range (or matching the filter).
           </p>
         )}
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3">
-          <p className="text-xs text-slate-400">
-            {rows.length === 0
-              ? "No hours recorded in this period."
-              : `${rows.length} job site${
-                  rows.length === 1 ? "" : "s"
-                } with hours in this period.`}
-          </p>
-          <p className="text-xs font-semibold text-slate-100 space-x-4">
-            <span>
-              Total hours:{" "}
-              <span className="text-amber-300">
-                {totalHours.toFixed(2)}h
-              </span>
-            </span>
-            <span>
-              Total labor cost:{" "}
-              <span className="text-emerald-300">
-                ${totalWages.toFixed(2)}
-              </span>
-            </span>
-          </p>
-        </div>
-      </div>
-
-      {/* Table */}
-      <div className="card bg-slate-900/80 border border-slate-700/80">
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-slate-100">
-            Job-site hours & labor cost
-          </h2>
-          <p className="text-[11px] text-slate-400">
-            Based on all completed shifts within the selected dates.
-          </p>
-        </div>
-
-        <div className="mt-2 overflow-x-auto">
-          <table className="admin-table min-w-full text-xs">
-            <thead>
-              <tr className="border-b border-slate-800/80">
-                <th className="px-3 py-2 text-left">Location</th>
-                <th className="px-3 py-2 text-right">Workers</th>
-                <th className="px-3 py-2 text-right">Shifts</th>
-                <th className="px-3 py-2 text-right">Total hours</th>
-                <th className="px-3 py-2 text-right">Labor cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && !loading && (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-3 py-6 text-center text-slate-400"
-                  >
-                    No data for this period.
-                  </td>
+        {filteredRows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="admin-table min-w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-800/80 bg-slate-900/60">
+                  <th className="px-3 py-2 text-left">Location</th>
+                  <th className="px-3 py-2 text-left">Workers</th>
+                  <th className="px-3 py-2 text-left">Shifts</th>
+                  <th className="px-3 py-2 text-right">Hours</th>
+                  <th className="px-3 py-2 text-right">Labor cost</th>
+                  <th className="px-3 py-2 text-left">Hours share</th>
                 </tr>
-              )}
+              </thead>
+              <tbody className="divide-y divide-slate-800/80">
+                {filteredRows
+                  .slice()
+                  .sort((a, b) => b.totalHours - a.totalHours)
+                  .map((row) => {
+                    const widthPct =
+                      maxHours > 0
+                        ? Math.max(4, (row.totalHours / maxHours) * 100)
+                        : 0;
 
-              {rows.map((row) => (
-                <tr key={row.locationId ?? row.locationName ?? "adhoc"}>
-                  <td className="px-3 py-2 align-middle text-slate-50">
-                    {row.locationName ?? "ADHOC job site"}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-slate-100">
-                    {row.workerCount}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-slate-100">
-                    {row.shiftCount}
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-amber-300">
-                    {row.totalHours.toFixed(2)}h
-                  </td>
-                  <td className="px-3 py-2 align-middle text-right text-emerald-300">
-                    ${row.totalWages.toFixed(2)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    return (
+                      <tr key={row.locationId ?? row.locationName}>
+                        <td className="px-3 py-2 align-middle text-slate-200">
+                          {row.locationName}
+                        </td>
+                        <td className="px-3 py-2 align-middle text-slate-200">
+                          {row.distinctWorkers}
+                        </td>
+                        <td className="px-3 py-2 align-middle text-slate-200">
+                          {row.shiftCount}
+                        </td>
+                        <td className="px-3 py-2 align-middle text-right text-slate-50">
+                          {row.totalHours.toFixed(2)}h
+                        </td>
+                        <td className="px-3 py-2 align-middle text-right text-emerald-300">
+                          ${row.totalCost.toFixed(2)}
+                        </td>
+                        <td className="px-3 py-2 align-middle">
+                          <div className="w-full max-w-xs">
+                            <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-amber-400"
+                                style={{ width: `${widthPct}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

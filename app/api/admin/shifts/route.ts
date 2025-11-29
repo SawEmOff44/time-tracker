@@ -69,6 +69,8 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // Return shifts with nested `user` and `location` objects so the
+    // admin UI can access `shift.user.name` and `shift.location.name`.
     const payload = shifts.map((shift) => {
       const clockInDate = shift.clockIn;
       const clockOutDate = shift.clockOut;
@@ -80,10 +82,8 @@ export async function GET(req: NextRequest) {
       return {
         id: shift.id,
         userId: shift.userId,
-        employeeName: shift.user?.name ?? "Unknown",
-        employeeCode: shift.user?.employeeCode ?? null,
-        locationName: shift.location?.name ?? "ADHOC job site",
-        locationCode: shift.location?.code ?? null,
+        user: shift.user ?? null,
+        location: shift.location ?? null,
         adhoc: !shift.location,
         clockIn: clockInDate.toISOString(),
         clockOut: clockOutDate ? clockOutDate.toISOString() : null,

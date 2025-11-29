@@ -49,6 +49,10 @@ export default function AdminPayrollPage() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<PayrollResponse | null>(null);
 
+  // NEW: client-side filters
+  const [employeeFilter, setEmployeeFilter] = useState("");
+  const [locationFilter, setLocationFilter] = useState("");
+
   async function load() {
     try {
       setLoading(true);
@@ -87,11 +91,35 @@ export default function AdminPayrollPage() {
 
   const rows = data?.rows ?? [];
 
-  // CSV Export handler
+  // Apply filters
+  const filteredRows = rows.filter((row) => {
+    const empTerm = employeeFilter.trim().toLowerCase();
+    const locTerm = locationFilter.trim().toLowerCase();
+
+    const matchesEmp =
+      !empTerm ||
+      row.userName.toLowerCase().includes(empTerm) ||
+      (row.employeeCode ?? "").toLowerCase().includes(empTerm);
+
+    const matchesLoc =
+      !locTerm || row.locationName.toLowerCase().includes(locTerm);
+
+    return matchesEmp && matchesLoc;
+  });
+
+  // Group filtered rows by location name
+  const groupedByLocation: Record<string, PayrollRow[]> = {};
+  for (const row of filteredRows) {
+    const key = row.locationName;
+    if (!groupedByLocation[key]) groupedByLocation[key] = [];
+    groupedByLocation[key].push(row);
+  }
+
+  // CSV export (uses filteredRows so it matches what you see)
   function handleExportCsv() {
-    if (!data || !data.rows || data.rows.length === 0) {
+    if (!filteredRows || filteredRows.length === 0) {
       if (typeof window !== "undefined") {
-        window.alert("No payroll data to export for this range.");
+        window.alert("No payroll data to export for this range / filters.");
       }
       return;
     }
@@ -109,7 +137,7 @@ export default function AdminPayrollPage() {
     const lines: string[] = [];
     lines.push(header.join(","));
 
-    for (const row of data.rows) {
+    for (const row of filteredRows) {
       const values = [
         row.date,
         row.locationName,
@@ -121,8 +149,9 @@ export default function AdminPayrollPage() {
       ];
 
       const escaped = values.map((v) => {
-        const needsQuotes = v.includes(",") || v.includes("\"") || v.includes("\n");
-        const safe = v.replace(/\"/g, '""');
+        const needsQuotes =
+          v.includes(",") || v.includes('"') || v.includes("\n");
+        const safe = v.replace(/"/g, '""');
         return needsQuotes ? `"${safe}"` : safe;
       });
 
@@ -144,14 +173,6 @@ export default function AdminPayrollPage() {
     URL.revokeObjectURL(url);
   }
 
-  // Group rows by location name
-  const groupedByLocation: Record<string, PayrollRow[]> = {};
-  for (const row of rows) {
-    const key = row.locationName;
-    if (!groupedByLocation[key]) groupedByLocation[key] = [];
-    groupedByLocation[key].push(row);
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -164,7 +185,7 @@ export default function AdminPayrollPage() {
           </p>
         </div>
 
-        {/* Range picker */}
+        {/* Range picker + Export */}
         <form
           className="flex flex-wrap gap-3 items-end"
           onSubmit={(e) => {
@@ -204,7 +225,7 @@ export default function AdminPayrollPage() {
           <button
             type="button"
             onClick={handleExportCsv}
-            disabled={loading || !data || !data.rows || data.rows.length === 0}
+            disabled={loading || filteredRows.length === 0}
             className="h-9 rounded-full border border-slate-600 px-4 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-60"
           >
             Export CSV
@@ -256,13 +277,41 @@ export default function AdminPayrollPage() {
         </div>
       )}
 
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
+            Filter by employee / code
+          </label>
+          <input
+            type="text"
+            value={employeeFilter}
+            onChange={(e) => setEmployeeFilter(e.target.value)}
+            placeholder="e.g. Kyle or KYLE"
+            className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100"
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
+            Filter by location
+          </label>
+          <input
+            type="text"
+            value={locationFilter}
+            onChange={(e) => setLocationFilter(e.target.value)}
+            placeholder="e.g. Main Shop"
+            className="rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-1.5 text-xs text-slate-100"
+          />
+        </div>
+      </div>
+
       {/* Tables grouped by location */}
       <div className="space-y-8">
         {Object.keys(groupedByLocation).length === 0 &&
           !loading &&
           !error && (
             <p className="text-sm text-slate-400">
-              No payroll data in range.
+              No payroll data in range (or matching filters).
             </p>
           )}
 
