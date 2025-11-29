@@ -69,7 +69,30 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    return NextResponse.json(shifts);
+    const payload = shifts.map((shift) => {
+      const clockInDate = shift.clockIn;
+      const clockOutDate = shift.clockOut;
+      const hours =
+        clockOutDate && clockInDate
+          ? (clockOutDate.getTime() - clockInDate.getTime()) / (1000 * 60 * 60)
+          : 0;
+
+      return {
+        id: shift.id,
+        userId: shift.userId,
+        employeeName: shift.user?.name ?? "Unknown",
+        employeeCode: shift.user?.employeeCode ?? null,
+        locationName: shift.location?.name ?? "ADHOC job site",
+        locationCode: shift.location?.code ?? null,
+        adhoc: !shift.location,
+        clockIn: clockInDate.toISOString(),
+        clockOut: clockOutDate ? clockOutDate.toISOString() : null,
+        hours,
+        notes: shift.notes,
+      };
+    });
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error loading shifts:", err);
     return NextResponse.json(

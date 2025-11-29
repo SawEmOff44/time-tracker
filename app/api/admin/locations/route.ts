@@ -23,7 +23,19 @@ export async function GET() {
       orderBy: { name: "asc" },
     });
 
-    return NextResponse.json(locations);
+    const payload = locations.map((loc) => ({
+      id: loc.id,
+      name: loc.name,
+      code: loc.code,
+      lat: loc.lat,
+      lng: loc.lng,
+      radiusMeters: loc.radiusMeters,
+      active: loc.active,
+      adhoc: loc.radiusMeters === 0,
+      createdAt: loc.createdAt.toISOString(),
+    }));
+
+    return NextResponse.json(payload);
   } catch (err) {
     console.error("Error loading locations:", err);
     return NextResponse.json(
