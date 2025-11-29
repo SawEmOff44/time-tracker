@@ -121,7 +121,7 @@ export async function POST(req: NextRequest) {
       // If the chosen location requires GPS, enforce it here so clock-out
       // requests aren't blocked by GPS validation.
       if (!adhoc && resolvedLocation && resolvedLocation.radiusMeters > 0) {
-        const CLOCKIN_TOLERANCE = 50; // meters of GPS noise allowance for clock-in
+        const CLOCKIN_TOLERANCE = 75; // meters of GPS noise allowance for clock-in
         if (lat == null || lng == null) {
           return NextResponse.json(
             {
