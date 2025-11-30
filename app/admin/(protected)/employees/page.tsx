@@ -617,6 +617,12 @@ export default function AdminEmployeesPage() {
                         >
                           View profile
                         </Link>
+                        <Link
+                          href={`/admin/employees/${u.id}/clock-history`}
+                          className="rounded-full bg-amber-400/20 px-3 py-1 text-[11px] font-semibold text-amber-300 hover:bg-amber-400/30"
+                        >
+                          Clock History
+                        </Link>
                         <button
                           type="button"
                           onClick={() => openEdit(u)}

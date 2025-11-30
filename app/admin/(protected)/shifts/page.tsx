@@ -84,6 +84,10 @@ export default function AdminShiftsPage() {
   const [formClockIn, setFormClockIn] = useState("");
   const [formClockOut, setFormClockOut] = useState("");
 
+  const [selectedShifts, setSelectedShifts] = useState<Set<string>>(new Set());
+  const [bulkEditModalOpen, setBulkEditModalOpen] = useState(false);
+  const [bulkLocationId, setBulkLocationId] = useState<string | null>(null);
+
   async function loadEmployeesAndLocations() {
     try {
       const [empRes, locRes] = await Promise.all([
@@ -248,6 +252,109 @@ export default function AdminShiftsPage() {
     }
   }
 
+  function toggleShiftSelection(id: string) {
+    const newSelected = new Set(selectedShifts);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedShifts(newSelected);
+  }
+
+  function toggleSelectAll() {
+    if (selectedShifts.size === shifts.length) {
+      setSelectedShifts(new Set());
+    } else {
+      setSelectedShifts(new Set(shifts.map((s: Shift) => s.id)));
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selectedShifts.size === 0) return;
+    if (!confirm(`Delete ${selectedShifts.size} selected shift(s)?`)) return;
+
+    try {
+      setLoading(true);
+      const deletePromises = Array.from(selectedShifts).map(id =>
+        fetch(`/api/shifts/${id}`, { method: "DELETE" })
+      );
+      await Promise.all(deletePromises);
+      setSelectedShifts(new Set());
+      await loadShifts();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to delete some shifts");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openBulkEditModal() {
+    if (selectedShifts.size === 0) return;
+    setBulkLocationId(null);
+    setBulkEditModalOpen(true);
+  }
+
+  async function handleBulkEditLocation() {
+    if (selectedShifts.size === 0) return;
+
+    try {
+      setLoading(true);
+      const updatePromises = Array.from(selectedShifts).map(id => {
+        const shift = shifts.find((s: Shift) => s.id === id);
+        if (!shift) return Promise.resolve();
+        return fetch(`/api/shifts/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: shift.userId,
+            locationId: bulkLocationId,
+            clockIn: shift.clockIn,
+            clockOut: shift.clockOut,
+          }),
+        });
+      });
+      await Promise.all(updatePromises);
+      setSelectedShifts(new Set());
+      setBulkEditModalOpen(false);
+      await loadShifts();
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update some shifts");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function exportToCSV() {
+    const headers = ['Employee', 'Employee Code', 'Location', 'Clock In', 'Clock Out', 'Hours', 'ADHOC', 'Latitude', 'Longitude'];
+    const rows = shifts.map((shift: Shift) => {
+      const isAdhoc = shift.location?.code === adhocCode || shift.location?.name?.toLowerCase().includes("adhoc");
+      const hoursStr = computeHours(shift.clockIn, shift.clockOut);
+      return [
+        shift.user?.name || '',
+        shift.user?.employeeCode || '',
+        shift.location?.name || '',
+        new Date(shift.clockIn).toLocaleString(),
+        shift.clockOut ? new Date(shift.clockOut).toLocaleString() : '',
+        hoursStr === '—' ? '' : hoursStr,
+        isAdhoc ? 'Yes' : 'No',
+        shift.clockInLat || '',
+        shift.clockInLng || '',
+      ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+    });
+    
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shifts-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   function mapUrlForShift(shift: Shift) {
     const lat = shift.clockInLat ?? shift.clockInLat ?? null;
     const lng = shift.clockInLng ?? shift.clockInLng ?? null;
@@ -314,11 +421,46 @@ export default function AdminShiftsPage() {
             Refresh
           </button>
           <button
+            onClick={exportToCSV}
+            disabled={shifts.length === 0}
+            className="px-3 py-1.5 text-sm border rounded bg-slate-900 hover:bg-slate-950 disabled:opacity-50"
+          >
+            Export CSV
+          </button>
+          <button
             onClick={openCreateModal}
             className="px-3 py-1.5 text-sm rounded bg-black text-white hover:bg-gray-900"
           >
             New shift
           </button>
+        </div>
+      </div>
+
+      {selectedShifts.size > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+          <span className="text-sm text-amber-200">
+            {selectedShifts.size} shift(s) selected
+          </span>
+          <div className="flex gap-2">
+            <button
+              onClick={openBulkEditModal}
+              className="px-3 py-1.5 text-xs rounded bg-amber-400 text-slate-950 hover:bg-amber-300 font-semibold"
+            >
+              Change Location
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              className="px-3 py-1.5 text-xs rounded bg-red-500 text-white hover:bg-red-600 font-semibold"
+            >
+              Delete Selected
+            </button>
+            <button
+              onClick={() => setSelectedShifts(new Set())}
+              className="px-3 py-1.5 text-xs border rounded bg-slate-800 text-slate-200 hover:bg-slate-700"
+            >
+              Clear Selection
+            </button>
+          </div>
         </div>
       </div>
 
@@ -344,6 +486,14 @@ export default function AdminShiftsPage() {
         <table className="min-w-full text-sm">
           <thead className="bg-slate-950">
             <tr className="text-left text-xs font-semibold text-slate-400">
+              <th className="px-4 py-2 w-8">
+                <input
+                  type="checkbox"
+                  checked={shifts.length > 0 && selectedShifts.size === shifts.length}
+                  onChange={toggleSelectAll}
+                  className="cursor-pointer"
+                />
+              </th>
               <th className="px-4 py-2">Employee</th>
               <th className="px-4 py-2">Location</th>
               <th className="px-4 py-2">Clock in</th>
@@ -358,7 +508,7 @@ export default function AdminShiftsPage() {
             {loading && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-6 text-center text-slate-400 text-sm"
                 >
                   Loading shifts…
@@ -369,7 +519,7 @@ export default function AdminShiftsPage() {
             {!loading && shifts.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-6 text-center text-slate-400 text-sm"
                 >
                   No shifts found.
@@ -394,8 +544,16 @@ export default function AdminShiftsPage() {
                 return (
                   <tr
                     key={shift.id}
-                    className="border-t border-slate-800 text-xs text-slate-100"
+                    className={`border-t border-slate-800 text-xs text-slate-100 ${selectedShifts.has(shift.id) ? 'bg-amber-500/5' : ''}`}
                   >
+                    <td className="px-4 py-2 align-top">
+                      <input
+                        type="checkbox"
+                        checked={selectedShifts.has(shift.id)}
+                        onChange={() => toggleShiftSelection(shift.id)}
+                        className="cursor-pointer"
+                      />
+                    </td>
                     <td className="px-4 py-2 align-top">
                       <div className="font-medium text-slate-100">
                         {empName}
@@ -573,6 +731,62 @@ export default function AdminShiftsPage() {
                   : modalMode === "create"
                   ? "Create shift"
                   : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Edit Modal */}
+      {bulkEditModalOpen && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+          <div className="w-full max-w-md rounded-lg bg-slate-900 shadow-lg">
+            <div className="flex items-center justify-between border-b px-5 py-3">
+              <h2 className="text-sm font-semibold text-slate-100">
+                Change location for {selectedShifts.size} shift(s)
+              </h2>
+              <button
+                onClick={() => setBulkEditModalOpen(false)}
+                className="text-slate-500 hover:text-slate-300 text-xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-4 text-sm">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  New Location
+                </label>
+                <select
+                  className="border rounded w-full px-2 py-1"
+                  value={bulkLocationId ?? ""}
+                  onChange={(e) => setBulkLocationId(e.target.value || null)}
+                >
+                  <option value="">(none)</option>
+                  {locations.map((loc) => (
+                    <option key={loc.id} value={loc.id}>
+                      {loc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t px-5 py-3">
+              <button
+                onClick={() => setBulkEditModalOpen(false)}
+                className="px-3 py-1.5 text-xs border rounded bg-slate-900 hover:bg-slate-950"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkEditLocation}
+                disabled={loading}
+                className="px-3 py-1.5 text-xs rounded bg-amber-400 text-slate-950 hover:bg-amber-300 font-semibold disabled:opacity-60"
+              >
+                {loading ? "Updating…" : "Update Location"}
               </button>
             </div>
           </div>

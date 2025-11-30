@@ -77,6 +77,7 @@ model Location {
 
   shifts       Shift[]
   defaultUsers User[]  @relation("UserDefaultLocation")
+  shiftTemplates ShiftTemplate[]
 
   createdAt DateTime @default(now())
 }
@@ -135,6 +136,27 @@ model ShiftCorrectionRequest {
   reason            String?
 
   status CorrectionStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ShiftTemplate {
+  id          String  @id @default(cuid())
+  name        String  // e.g., "Morning Shift", "Night Security"
+  description String?
+
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+
+  // Time of day (stored as minutes from midnight)
+  startMinutes Int // e.g., 480 = 8:00 AM
+  endMinutes   Int // e.g., 1020 = 5:00 PM (17:00)
+
+  // Which days of the week (0=Sunday, 6=Saturday)
+  daysOfWeek Int[] // e.g., [1,2,3,4,5] for Mon-Fri
+
+  active Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
