@@ -40,6 +40,15 @@ model User {
   hourlyRate   Float?  @default(0)
   salaryAnnnual Float?
 
+  // PTO/Time-off settings
+  ptoBalance   Float   @default(0)  // in days
+  ptoRequests  TimeOffRequest[]
+
+  // Notifications
+  notifyEmail  Boolean @default(true)
+  notifySms    Boolean @default(false)
+  notifications Notification[]
+
   createdAt DateTime @default(now())
 }
 
@@ -160,4 +169,62 @@ model ShiftTemplate {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+enum TimeOffType {
+  PTO
+  SICK
+  VACATION
+  UNPAID
+  OTHER
+}
+
+enum TimeOffStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model TimeOffRequest {
+  id          String   @id @default(cuid())
+  
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  
+  type        TimeOffType
+  status      TimeOffStatus @default(PENDING)
+  
+  startDate   DateTime
+  endDate     DateTime
+  
+  daysRequested Float  // Partial days allowed (e.g., 0.5 for half day)
+  reason      String?
+  
+  reviewedBy  String?  // Admin user ID
+  reviewedAt  DateTime?
+  reviewNotes String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([userId, status])
+  @@index([startDate, endDate])
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  
+  user        User     @relation(fields: [userId], references: [id])
+  userId      String
+  
+  type        String   // e.g., "shift_flagged", "correction_request", "pto_approved"
+  title       String
+  message     String
+  
+  read        Boolean  @default(false)
+  relatedId   String?  // ID of related entity (shift, correction, pto request)
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([userId, read])
 }

@@ -11,6 +11,7 @@ const navItems = [
   { href: "/admin/shift-templates", label: "Shift Templates" },
   { href: "/admin/payroll", label: "Payroll" },
   { href: "/admin/reports", label: "Reports" },
+  { href: "/admin/time-off", label: "Time Off" },
   { href: "/admin/exceptions", label: "Exceptions" },
   { href: "/admin/flagged-shifts", label: "Flagged Shifts" },
 ];
