@@ -427,6 +427,12 @@ export default function AdminShiftsPage() {
           >
             Export CSV
           </button>
+          <a
+            href="/admin/shifts/bulk-create"
+            className="px-3 py-1.5 text-sm border rounded bg-amber-600 hover:bg-amber-700 text-white"
+          >
+            Bulk Create
+          </a>
           <button
             onClick={openCreateModal}
             className="px-3 py-1.5 text-sm rounded bg-black text-white hover:bg-gray-900"
