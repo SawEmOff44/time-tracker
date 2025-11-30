@@ -228,3 +228,36 @@ model Notification {
   
   @@index([userId, read])
 }
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  APPROVE
+  REJECT
+  EXPORT
+  LOGIN
+  LOGOUT
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  
+  userId      String      // Admin who performed action
+  userName    String      // Cached for performance
+  
+  action      AuditAction
+  entity      String      // e.g., "shift", "employee", "location", "payroll"
+  entityId    String?     // ID of affected entity
+  
+  details     String?     // JSON string with additional context
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime    @default(now())
+  
+  @@index([userId])
+  @@index([entity])
+  @@index([createdAt])
+  @@index([action])
+}

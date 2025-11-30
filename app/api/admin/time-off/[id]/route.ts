@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { cookies } from 'next/headers';
 import { createNotification } from '@/lib/notifications';
+import { createAuditLog } from '@/lib/auditLog';
 
 export async function PATCH(
   req: NextRequest,
@@ -84,6 +85,23 @@ export async function PATCH(
       title: `Time-Off Request ${status}`,
       message: `Your ${existingRequest.type} request for ${existingRequest.daysRequested} day(s) has been ${status.toLowerCase()}.${reviewNotes ? ` Note: ${reviewNotes}` : ''}`,
       relatedId: id
+    });
+
+    // Audit log
+    await createAuditLog({
+      userId: adminId,
+      userName: 'Admin',
+      action: status === 'APPROVED' ? 'APPROVE' : 'REJECT',
+      entity: 'time-off',
+      entityId: id,
+      details: {
+        description: `${status} time-off request for ${existingRequest.user.name}`,
+        type: existingRequest.type,
+        days: existingRequest.daysRequested,
+        reviewNotes
+      },
+      ipAddress: req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || undefined,
+      userAgent: req.headers.get('user-agent') || undefined
     });
 
     return NextResponse.json(updated);

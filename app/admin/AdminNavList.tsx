@@ -14,6 +14,7 @@ const navItems = [
   { href: "/admin/time-off", label: "Time Off" },
   { href: "/admin/exceptions", label: "Exceptions" },
   { href: "/admin/flagged-shifts", label: "Flagged Shifts" },
+  { href: "/admin/audit-log", label: "Audit Log" },
 ];
 
 export default function AdminNavList() {
