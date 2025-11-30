@@ -173,6 +173,169 @@ export default function AdminPayrollPage() {
     URL.revokeObjectURL(url);
   }
 
+  // QuickBooks IIF export
+  function handleExportQuickBooks() {
+    if (!filteredRows || filteredRows.length === 0) {
+      if (typeof window !== "undefined") {
+        window.alert("No payroll data to export for this range / filters.");
+      }
+      return;
+    }
+
+    const lines: string[] = [];
+    
+    // IIF header
+    lines.push('!TIMERHDR\tVER\tREL\tCOMPANYNAME\tIMPORTEDBEFORE\tFROMTIMER');
+    lines.push('TIMERHDR\t8\t0\tRhinehartCo\tN\tY');
+    lines.push('!TIMEACT\tDATE\tJOB\tEMP\tITEM\tPITEM\tDURATION\tPROJ\tNOTE');
+    
+    for (const row of filteredRows) {
+      const duration = `${Math.floor(row.totalHours)}:${Math.round((row.totalHours % 1) * 60)}`;
+      lines.push([
+        'TIMEACT',
+        row.date,
+        row.locationName,
+        row.userName,
+        'Regular Time',
+        '',
+        duration,
+        row.locationName,
+        ''
+      ].join('\t'));
+    }
+
+    const content = lines.join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const filename = `quickbooks_${startDate}_to_${endDate}.iif`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  // ADP export
+  function handleExportADP() {
+    if (!filteredRows || filteredRows.length === 0) {
+      if (typeof window !== "undefined") {
+        window.alert("No payroll data to export for this range / filters.");
+      }
+      return;
+    }
+
+    // ADP format: Employee Code, Hours, Earnings Code, Date
+    const header = [
+      "Employee Code",
+      "Regular Hours",
+      "Overtime Hours",
+      "Earnings Code",
+      "Date"
+    ];
+
+    const lines: string[] = [];
+    lines.push(header.join(","));
+
+    // Group by employee
+    const byEmployee: Record<string, { regularHours: number; overtimeHours: number; code: string }> = {};
+    
+    for (const row of filteredRows) {
+      const key = row.employeeCode || row.userName;
+      if (!byEmployee[key]) {
+        byEmployee[key] = { regularHours: 0, overtimeHours: 0, code: row.employeeCode || '' };
+      }
+      
+      // Calculate regular vs OT (simple: >40hrs/week = OT)
+      const regularHours = Math.min(row.totalHours, 8);
+      const overtimeHours = Math.max(row.totalHours - 8, 0);
+      
+      byEmployee[key].regularHours += regularHours;
+      byEmployee[key].overtimeHours += overtimeHours;
+    }
+
+    for (const [key, data] of Object.entries(byEmployee)) {
+      const values = [
+        data.code,
+        data.regularHours.toFixed(2),
+        data.overtimeHours.toFixed(2),
+        'REG',
+        startDate
+      ];
+      
+      const escaped = values.map((v) => {
+        const needsQuotes = v.includes(",") || v.includes('"') || v.includes("\n");
+        const safe = v.replace(/"/g, '""');
+        return needsQuotes ? `"${safe}"` : safe;
+      });
+      
+      lines.push(escaped.join(","));
+    }
+
+    const csvContent = lines.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const filename = `adp_${startDate}_to_${endDate}.csv`;
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
+  // Pay period helpers
+  function setPayPeriod(type: string) {
+    const today = new Date();
+    let start = new Date();
+    let end = new Date();
+
+    switch (type) {
+      case 'thisWeek':
+        const day = today.getDay();
+        const diff = today.getDate() - day;
+        start = new Date(today.setDate(diff));
+        end = new Date();
+        break;
+      case 'lastWeek':
+        const lastSunday = new Date(today);
+        lastSunday.setDate(today.getDate() - today.getDay() - 7);
+        const lastSaturday = new Date(lastSunday);
+        lastSaturday.setDate(lastSunday.getDate() + 6);
+        start = lastSunday;
+        end = lastSaturday;
+        break;
+      case 'biweekly1':
+        // Current biweekly (1st-14th)
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+        end = new Date(today.getFullYear(), today.getMonth(), 14);
+        break;
+      case 'biweekly2':
+        // Second biweekly (15th-end of month)
+        start = new Date(today.getFullYear(), today.getMonth(), 15);
+        end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        break;
+      case 'thisMonth':
+        start = new Date(today.getFullYear(), today.getMonth(), 1);
+        end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        break;
+      case 'lastMonth':
+        start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        end = new Date(today.getFullYear(), today.getMonth(), 0);
+        break;
+    }
+
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    
+    setStartDate(fmt(start));
+    setEndDate(fmt(end));
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -184,15 +347,62 @@ export default function AdminPayrollPage() {
             see how many man-hours are going into each job site.
           </p>
         </div>
+      </div>
 
-        {/* Range picker + Export */}
-        <form
-          className="flex flex-wrap gap-3 items-end"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void load();
-          }}
-        >
+      {/* Pay Period Quick Select */}
+      <div className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400 mb-3">
+          Pay Period
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setPayPeriod('thisWeek')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            This Week
+          </button>
+          <button
+            onClick={() => setPayPeriod('lastWeek')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            Last Week
+          </button>
+          <button
+            onClick={() => setPayPeriod('biweekly1')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            1st-14th
+          </button>
+          <button
+            onClick={() => setPayPeriod('biweekly2')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            15th-End
+          </button>
+          <button
+            onClick={() => setPayPeriod('thisMonth')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            This Month
+          </button>
+          <button
+            onClick={() => setPayPeriod('lastMonth')}
+            className="px-3 py-1.5 text-xs border border-slate-600 rounded-full hover:bg-slate-800"
+          >
+            Last Month
+          </button>
+        </div>
+      </div>
+
+      {/* Range picker + Export */}
+      <form
+        className="rounded-2xl border border-slate-700 bg-slate-900/80 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void load();
+        }}
+      >
+        <div className="flex flex-wrap gap-3 items-end">
           <div>
             <label className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 mb-1">
               Start date
@@ -222,14 +432,50 @@ export default function AdminPayrollPage() {
           >
             {loading ? "Loading…" : "Refresh"}
           </button>
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={loading || filteredRows.length === 0}
-            className="h-9 rounded-full border border-slate-600 px-4 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-60"
-          >
-            Export CSV
-          </button>
+          
+          {/* Export Dropdown */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
+              disabled={loading || filteredRows.length === 0}
+              className="h-9 rounded-full border border-slate-600 px-4 text-xs font-semibold text-slate-100 hover:bg-slate-800 disabled:opacity-60"
+            >
+              Export ▾
+            </button>
+            
+            {exportMenuOpen && (
+              <div className="absolute right-0 mt-1 w-48 rounded-lg border border-slate-700 bg-slate-900 shadow-lg z-10">
+                <button
+                  onClick={() => {
+                    handleExportCsv();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-800 rounded-t-lg"
+                >
+                  CSV (Standard)
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportQuickBooks();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-800"
+                >
+                  QuickBooks IIF
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportADP();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-800 rounded-b-lg"
+                >
+                  ADP Format
+                </button>
+              </div>
+            )}
+          </div>
         </form>
       </div>
 
