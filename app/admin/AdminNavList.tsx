@@ -10,6 +10,7 @@ const navItems = [
   { href: "/admin/shifts", label: "Shifts" },
   { href: "/admin/shift-templates", label: "Shift Templates" },
   { href: "/admin/payroll", label: "Payroll" },
+  { href: "/admin/reports", label: "Reports" },
   { href: "/admin/exceptions", label: "Exceptions" },
   { href: "/admin/flagged-shifts", label: "Flagged Shifts" },
 ];
